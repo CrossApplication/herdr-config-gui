@@ -1,0 +1,371 @@
+//! Binary-driven schema: derive the settings form from `herdr --default-config`.
+//!
+//! The default config is read line-by-line, NOT through a TOML parser: almost
+//! every setting ships commented out, and a TOML parser would discard exactly
+//! the lines we need (both the `# key = value` defaults and the prose that
+//! documents them). Commented-out section headers such as `# [theme.custom]`
+//! must be tracked too, or their keys get attributed to the wrong table.
+
+use regex::Regex;
+use serde::Serialize;
+use toml_edit::Value;
+
+#[derive(Serialize, Clone)]
+pub struct Item {
+    pub line: usize,
+    /// Dotted path used as the identity of a setting, e.g. `ui.toast.delivery`.
+    pub path: String,
+    pub section: String,
+    pub key: String,
+    /// `bool` | `integer` | `float` | `string` | `array` | `table` | `datetime`
+    pub ty: String,
+    /// Default value, verbatim TOML source text.
+    pub default: String,
+    /// Doc-comment lines immediately above the setting.
+    pub doc: Vec<String>,
+    /// Trailing `# ...` comment on the same line.
+    pub trailing: String,
+    /// Quoted literals harvested from the doc block; likely enum members.
+    pub enum_candidates: Vec<String>,
+    /// True when the default is `""` and the docs call it optional/unset.
+    pub optional: bool,
+    /// True when the default is NOT empty but the docs say an empty string
+    /// turns the feature off. Such a setting needs a way to write `""`
+    /// explicitly, which "clear the field to inherit the default" cannot do.
+    pub empty_disables: bool,
+    pub is_key_binding: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct Section {
+    pub name: String,
+    pub line: usize,
+    /// The header itself was commented out in the default config.
+    pub commented: bool,
+    pub array_of_tables: bool,
+    pub doc: Vec<String>,
+    pub items: Vec<Item>,
+    /// Prose lines shaped like `key = value` but not valid TOML. These are
+    /// documentation, not settings -- most describe the allowed values of a
+    /// nearby setting, so we keep them as hints instead of dropping them.
+    pub hints: Vec<Hint>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct Hint {
+    pub line: usize,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Serialize)]
+pub struct Schema {
+    pub sections: Vec<Section>,
+    pub item_count: usize,
+    pub hint_count: usize,
+}
+
+fn infer_type(raw: &str) -> Option<&'static str> {
+    let parsed: Value = raw.parse().ok()?;
+    Some(match parsed {
+        Value::String(_) => "string",
+        Value::Integer(_) => "integer",
+        Value::Float(_) => "float",
+        Value::Boolean(_) => "bool",
+        Value::Datetime(_) => "datetime",
+        Value::Array(_) => "array",
+        Value::InlineTable(_) => "table",
+    })
+}
+
+/// Enum members documented as bare assignments, e.g. the `[ui.toast]` block's
+/// `off = disable pop-up notifications`. Those lines are prose (we reject them
+/// as settings) but their left-hand sides are exactly the allowed values.
+fn documented_alternatives(doc: &[String]) -> Vec<String> {
+    let re = Regex::new(r"^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*\S").unwrap();
+    let mut out: Vec<String> = Vec::new();
+    for line in doc {
+        if let Some(c) = re.captures(line) {
+            let v = c[1].to_string();
+            if !out.contains(&v) {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+fn quoted_literals(doc: &[String]) -> Vec<String> {
+    let re = Regex::new(r#""([^"\\]*)""#).unwrap();
+    let mut out: Vec<String> = Vec::new();
+    for line in doc {
+        for c in re.captures_iter(line) {
+            let v = c[1].to_string();
+            if !v.is_empty() && !out.contains(&v) {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+pub fn parse(text: &str) -> Schema {
+    let re_section = Regex::new(r"^(\[\[?)([A-Za-z0-9_.\-]+)(\]\]?)$").unwrap();
+    let re_kv = Regex::new(r"^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(.*?)(?:\s+#\s*(.*))?$").unwrap();
+
+    let mut sections: Vec<Section> = Vec::new();
+    let mut current = String::new(); // "" == root table
+    let mut doc: Vec<String> = Vec::new();
+
+    // Root pseudo-section so top-level keys (e.g. `onboarding`) have a home.
+    sections.push(Section {
+        name: String::new(),
+        line: 1,
+        commented: false,
+        array_of_tables: false,
+        doc: Vec::new(),
+        items: Vec::new(),
+        hints: Vec::new(),
+    });
+
+    for (idx, raw_line) in text.lines().enumerate() {
+        let line_no = idx + 1;
+        let trimmed = raw_line.trim();
+
+        if trimmed.is_empty() {
+            doc.clear();
+            continue;
+        }
+
+        let commented = trimmed.starts_with('#');
+        let body = if commented {
+            trimmed.trim_start_matches('#').trim()
+        } else {
+            trimmed
+        };
+        if body.is_empty() {
+            continue;
+        }
+
+        if let Some(c) = re_section.captures(body) {
+            let open = &c[1];
+            let name = c[2].to_string();
+            let array_of_tables = open == "[[";
+            current = name.clone();
+            if !sections.iter().any(|s| s.name == name) {
+                sections.push(Section {
+                    name,
+                    line: line_no,
+                    commented,
+                    array_of_tables,
+                    doc: std::mem::take(&mut doc),
+                    items: Vec::new(),
+                    hints: Vec::new(),
+                });
+            }
+            doc.clear();
+            continue;
+        }
+
+        if let Some(c) = re_kv.captures(body) {
+            let key = c[1].to_string();
+            let value = c.get(2).map(|m| m.as_str()).unwrap_or("").trim().to_string();
+            let trailing = c.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+
+            let sec_idx = sections.iter().position(|s| s.name == current).unwrap_or(0);
+
+            match infer_type(&value) {
+                Some(ty) => {
+                    let path = if current.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{current}.{key}")
+                    };
+                    let doc_block = std::mem::take(&mut doc);
+                    let mut enum_candidates = if ty == "string" {
+                        quoted_literals(&doc_block)
+                    } else {
+                        Vec::new()
+                    };
+                    if ty == "string" {
+                        for alt in documented_alternatives(&doc_block) {
+                            if !enum_candidates.contains(&alt) {
+                                enum_candidates.push(alt);
+                            }
+                        }
+                    }
+                    let hay = format!("{} {}", doc_block.join(" "), trailing).to_lowercase();
+                    let optional = value == "\"\""
+                        && (hay.contains("optional") || hay.contains("unset") || hay.contains("disable"));
+                    let empty_disables = ty == "string"
+                        && value != "\"\""
+                        && (hay.contains("empty") || hay.contains("set to \"\""));
+                    let is_key_binding = current == "keys" || current.starts_with("keys.");
+
+                    sections[sec_idx].items.push(Item {
+                        line: line_no,
+                        path,
+                        section: current.clone(),
+                        key,
+                        ty: ty.to_string(),
+                        default: value,
+                        doc: doc_block,
+                        trailing,
+                        enum_candidates,
+                        optional,
+                        empty_disables,
+                        is_key_binding,
+                    });
+                }
+                None => {
+                    // Prose that merely looks like an assignment.
+                    let description = if trailing.is_empty() {
+                        value
+                    } else {
+                        format!("{value} # {trailing}")
+                    };
+                    sections[sec_idx].hints.push(Hint {
+                        line: line_no,
+                        name: key,
+                        description,
+                    });
+                    doc.push(body.to_string());
+                }
+            }
+            continue;
+        }
+
+        if commented {
+            doc.push(body.to_string());
+        }
+    }
+
+    sections.retain(|s| !(s.items.is_empty() && s.hints.is_empty()));
+    let item_count = sections.iter().map(|s| s.items.len()).sum();
+    let hint_count = sections.iter().map(|s| s.hints.len()).sum();
+    Schema { sections, item_count, hint_count }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse the real `herdr --default-config` output from the installed
+    /// binary. These counts pin the behaviours we care about; if a future
+    /// herdr release changes them, the schema is meant to follow along, but
+    /// the structural invariants below must keep holding.
+    fn real() -> Schema {
+        parse(&crate::herdr::default_config().expect("herdr --default-config"))
+    }
+
+    #[test]
+    fn extracts_every_setting() {
+        let s = real();
+        assert_eq!(s.item_count, 140, "settable keys");
+        // 24 bracketed headers plus the root pseudo-section holding `onboarding`.
+        assert_eq!(s.sections.len(), 25, "sections");
+        let root = s.sections.iter().find(|x| x.name.is_empty()).unwrap();
+        assert_eq!(root.items.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(), ["onboarding"]);
+    }
+
+    #[test]
+    fn rejects_prose_that_looks_like_an_assignment() {
+        let s = real();
+        assert_eq!(s.hint_count, 7, "prose lines shaped like key = value");
+
+        // `# off = disable pop-up notifications` documents the allowed values
+        // of ui.toast.delivery. It must never become a setting called `off`.
+        let toast = s.sections.iter().find(|x| x.name == "ui.toast").unwrap();
+        let hints: Vec<&str> = toast.hints.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(hints, ["off", "herdr", "terminal", "system"]);
+        assert!(!toast.items.iter().any(|i| i.key == "off"));
+        assert!(toast.items.iter().any(|i| i.key == "delivery"));
+    }
+
+    #[test]
+    fn tracks_commented_out_section_headers() {
+        let s = real();
+        let commented: Vec<&str> = s
+            .sections
+            .iter()
+            .filter(|x| x.commented)
+            .map(|x| x.name.as_str())
+            .collect();
+        assert!(commented.contains(&"theme.custom"));
+        assert!(commented.contains(&"ui.sidebar.agents"));
+        assert_eq!(commented.len(), 10);
+
+        // `rows` lives under [ui.sidebar.agents], not under [ui].
+        let ui = s.sections.iter().find(|x| x.name == "ui").unwrap();
+        assert!(!ui.items.iter().any(|i| i.key == "rows"));
+        let agents = s.sections.iter().find(|x| x.name == "ui.sidebar.agents").unwrap();
+        assert!(agents.items.iter().any(|i| i.path == "ui.sidebar.agents.rows"));
+    }
+
+    #[test]
+    fn keys_section_dominates_and_is_flagged() {
+        let s = real();
+        let keys = s.sections.iter().find(|x| x.name == "keys").unwrap();
+        assert_eq!(keys.items.len(), 54);
+        assert!(keys.items.iter().all(|i| i.is_key_binding));
+        let prefix = keys.items.iter().find(|i| i.key == "prefix").unwrap();
+        assert_eq!(prefix.default, "\"ctrl+b\"");
+        // Bindings that ship unset are offered as "optional", not as "".
+        assert!(keys.items.iter().find(|i| i.key == "open_worktree").unwrap().optional);
+    }
+
+    #[test]
+    fn flags_settings_where_an_empty_string_is_meaningful() {
+        let s = real();
+        let flagged: Vec<&str> = s
+            .sections
+            .iter()
+            .flat_map(|sec| sec.items.iter())
+            .filter(|i| i.empty_disables)
+            .map(|i| i.path.as_str())
+            .collect();
+        // These two default to a real value but document "" as an off switch,
+        // so clearing the field cannot express them -- the UI needs an
+        // explicit "disable" action.
+        assert_eq!(flagged, ["keys.remote_image_paste", "ui.window_title"]);
+
+        // Settings that already default to "" need no such action.
+        let term = s.sections.iter().find(|x| x.name == "terminal").unwrap();
+        let shell = term.items.iter().find(|i| i.key == "default_shell").unwrap();
+        assert!(shell.optional || shell.default == "\"\"");
+        assert!(!shell.empty_disables);
+    }
+
+    #[test]
+    fn harvests_enum_candidates_from_doc_prose() {
+        let s = real();
+        let term = s.sections.iter().find(|x| x.name == "terminal").unwrap();
+        let mode = term.items.iter().find(|i| i.key == "shell_mode").unwrap();
+        for want in ["auto", "login", "non_login"] {
+            assert!(mode.enum_candidates.contains(&want.to_string()), "missing {want}");
+        }
+    }
+
+    #[test]
+    fn rejected_prose_becomes_enum_candidates() {
+        let s = real();
+        let toast = s.sections.iter().find(|x| x.name == "ui.toast").unwrap();
+        let delivery = toast.items.iter().find(|i| i.key == "delivery").unwrap();
+        for want in ["off", "herdr", "terminal", "system"] {
+            assert!(
+                delivery.enum_candidates.contains(&want.to_string()),
+                "ui.toast.delivery missing candidate {want}: {:?}",
+                delivery.enum_candidates
+            );
+        }
+    }
+
+    #[test]
+    fn array_of_tables_is_marked() {
+        let s = real();
+        let cmd = s.sections.iter().find(|x| x.name == "keys.command").unwrap();
+        assert!(cmd.array_of_tables);
+        assert!(cmd.commented);
+        assert_eq!(cmd.items.len(), 5);
+    }
+}
