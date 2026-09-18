@@ -10,6 +10,7 @@ import {
   type SaveResult,
   type Section,
 } from "./types";
+import { FORM_LABEL, colorForm, colorToHex } from "./color";
 import { openCapture } from "./capture";
 import { openProblems, problemSummary, type ProblemsHost } from "./problems";
 import {
@@ -101,7 +102,22 @@ function prefixChord(): string {
 
 const RISK_LABEL = { safe: "安定", caution: "要確認", risky: "端末依存" } as const;
 
+function colorNote(item: Item): string {
+  if (!item.color) return "";
+  const v = effective(item.path);
+  if (v === null) return `<span class="kn none">テーマ既定</span>`;
+  const text = toDisplay(v, item.ty);
+  const form = colorForm(text);
+  const cls = form === "malformed" ? "err" : form === "empty" ? "none" : "safe";
+  const swatch =
+    colorToHex(text) !== null
+      ? `<span class="kn-chip" style="background:${colorToHex(text)}"></span>`
+      : "";
+  return `${swatch}<span class="kn ${cls}">${FORM_LABEL[form]}</span>`;
+}
+
 function keynoteFor(item: Item): string {
+  if (item.color) return colorNote(item);
   if (!item.binding_kind) return "";
   const kind = item.binding_kind as Kind;
   const text = bindingText(item);
@@ -232,6 +248,17 @@ function widgetFor(item: Item): string {
   }
 
   const shown = v === null || v === EMPTY ? "" : toDisplay(v, item.ty);
+
+  if (item.color) {
+    const hex = colorToHex(shown);
+    // The picker always writes #rrggbb; names, rgb() and "reset" stay typeable.
+    return `<input type="color" class="swatch" data-sw="${esc(item.path)}"
+        value="${hex ?? "#000000"}" title="色を選ぶ（#rrggbb で書き込みます）" />
+      <input type="text" data-w="${esc(item.path)}" value="${esc(shown)}"
+        placeholder="${esc(item.default ? toDisplay(item.default, item.ty) : "テーマ既定")}"
+        class="field" spellcheck="false" autocomplete="off" />`;
+  }
+
   const type = item.ty === "integer" || item.ty === "float" ? "number" : "text";
   const listId = item.enum_candidates.length ? `dl-${item.path.replace(/\./g, "-")}` : "";
   const datalist = listId
@@ -418,6 +445,15 @@ function bindWidgets() {
     };
     input.oninput = commit;
     input.onchange = commit;
+  });
+
+  body.querySelectorAll<HTMLInputElement>("input[data-sw]").forEach((sw) => {
+    const path = sw.dataset.sw!;
+    sw.oninput = () => {
+      setEdit(path, JSON.stringify(sw.value));
+      const field = body.querySelector<HTMLInputElement>(`input[data-w="${path}"]`);
+      if (field) field.value = sw.value;
+    };
   });
 
   body.querySelectorAll<HTMLSelectElement>("select[data-w]").forEach((sel) => {

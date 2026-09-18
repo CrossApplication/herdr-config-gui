@@ -3,6 +3,7 @@
 mod check;
 mod config;
 mod herdr;
+mod overlay;
 mod schema;
 
 use serde::Serialize;
@@ -26,7 +27,7 @@ fn bootstrap() -> Bootstrap {
     let cfg = config::load();
 
     let (schema, schema_error) = match herdr::default_config() {
-        Ok(text) => (Some(schema::parse(&text)), None),
+        Ok(text) => (Some(schema::build(&text)), None),
         Err(e) => (None, Some(e)),
     };
 

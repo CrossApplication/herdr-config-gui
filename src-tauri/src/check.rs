@@ -32,6 +32,9 @@ pub enum Kind {
     Type,
     Variant,
     Syntax,
+    /// A report herdr makes that is none of the above, e.g. a sound file it
+    /// could not find. Kept rather than dropped so nothing is hidden.
+    Other,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -173,6 +176,15 @@ pub fn parse_output(out: &str) -> CheckReport {
         }
 
         if !in_parse_error {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                kind: Kind::Other,
+                message: line.to_string(),
+                path: None,
+                line: None,
+                expected: None,
+                allowed: Vec::new(),
+            });
             continue;
         }
 

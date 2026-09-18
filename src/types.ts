@@ -13,6 +13,10 @@ export type Item = {
   is_key_binding: boolean;
   binding_kind: "prefix" | "action" | "navigate" | "indexed" | "command" | null;
   accepts_range: boolean;
+  /** The value is a color: the form offers a picker and validates it. */
+  color: boolean;
+  /** Contributed by the hand-written overlay, not by `herdr --default-config`. */
+  from_overlay: boolean;
 };
 export type Hint = { line: number; name: string; description: string };
 export type Section = {

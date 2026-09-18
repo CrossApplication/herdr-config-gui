@@ -10,6 +10,8 @@ use regex::Regex;
 use serde::Serialize;
 use toml_edit::Value;
 
+use crate::overlay;
+
 #[derive(Serialize, Clone)]
 pub struct Item {
     pub line: usize,
@@ -42,6 +44,12 @@ pub struct Item {
     pub binding_kind: Option<&'static str>,
     /// Accepts the `1..9` range form (e.g. `switch_tab = "prefix+1..9"`).
     pub accepts_range: bool,
+    /// The value is a color, so the form offers a picker. herdr does not
+    /// validate colors, so this is the only place a bad one gets caught.
+    pub color: bool,
+    /// Supplied by the hand-written overlay rather than by
+    /// `herdr --default-config`, which documents only some table members.
+    pub from_overlay: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -71,6 +79,76 @@ pub struct Schema {
     pub sections: Vec<Section>,
     pub item_count: usize,
     pub hint_count: usize,
+}
+
+/// An item the overlay contributes: no documented default, so an empty field
+/// means "not overridden".
+fn overlay_item(section: &str, key: &str) -> Item {
+    Item {
+        line: 0,
+        path: format!("{section}.{key}"),
+        section: section.to_string(),
+        key: key.to_string(),
+        ty: "string".to_string(),
+        default: String::new(),
+        doc: Vec::new(),
+        trailing: String::new(),
+        enum_candidates: Vec::new(),
+        optional: false,
+        empty_disables: false,
+        is_key_binding: false,
+        binding_kind: None,
+        accepts_range: false,
+        color: true,
+        from_overlay: true,
+    }
+}
+
+/// Fill in the table members `--default-config` only demonstrates.
+///
+/// `[theme.custom]` shows seven of nineteen color tokens; the rest are real
+/// settings herdr accepts (each one probed in `overlay`'s tests) that the form
+/// could otherwise never reach.
+pub fn augment(schema: &mut Schema) {
+    for table in overlay::THEME_TABLES {
+        let idx = match schema.sections.iter().position(|s| s.name == *table) {
+            Some(i) => i,
+            None => {
+                schema.sections.push(Section {
+                    name: table.to_string(),
+                    line: 0,
+                    commented: true,
+                    array_of_tables: false,
+                    doc: Vec::new(),
+                    items: Vec::new(),
+                    hints: Vec::new(),
+                });
+                schema.sections.len() - 1
+            }
+        };
+        let section = &mut schema.sections[idx];
+        for token in overlay::THEME_TOKENS {
+            if !section.items.iter().any(|i| i.key == *token) {
+                section.items.push(overlay_item(table, token));
+            }
+        }
+        // Present them in the overlay's order so surfaces, text and palette
+        // stay grouped regardless of which ones happened to be documented.
+        section.items.sort_by_key(|i| {
+            overlay::THEME_TOKENS
+                .iter()
+                .position(|t| *t == i.key)
+                .unwrap_or(usize::MAX)
+        });
+    }
+    schema.item_count = schema.sections.iter().map(|s| s.items.len()).sum();
+}
+
+/// The schema the UI consumes: parsed from herdr, then completed by the overlay.
+pub fn build(default_config: &str) -> Schema {
+    let mut schema = parse(default_config);
+    augment(&mut schema);
+    schema
 }
 
 fn infer_type(raw: &str) -> Option<&'static str> {
@@ -146,6 +224,12 @@ pub fn parse(text: &str) -> Schema {
 
     let mut sections: Vec<Section> = Vec::new();
     let mut current = String::new(); // "" == root table
+                                     // A commented-out header such as `# [theme.custom]` only governs the
+                                     // comment block it heads. `[ui]`'s own `accent` sits after the
+                                     // `# [ui.sidebar.spaces]` block, separated by a blank line, and belongs to
+                                     // `[ui]` -- herdr rejects `ui.sidebar.spaces.accent`. So a blank line ends
+                                     // a commented header's scope and restores the last real one.
+    let mut real_section = String::new();
     let mut doc: Vec<String> = Vec::new();
 
     // Root pseudo-section so top-level keys (e.g. `onboarding`) have a home.
@@ -165,6 +249,7 @@ pub fn parse(text: &str) -> Schema {
 
         if trimmed.is_empty() {
             doc.clear();
+            current = real_section.clone();
             continue;
         }
 
@@ -183,6 +268,9 @@ pub fn parse(text: &str) -> Schema {
             let name = c[2].to_string();
             let array_of_tables = open == "[[";
             current = name.clone();
+            if !commented {
+                real_section = name.clone();
+            }
             if !sections.iter().any(|s| s.name == name) {
                 sections.push(Section {
                     name,
@@ -239,6 +327,7 @@ pub fn parse(text: &str) -> Schema {
                         && value != "\"\""
                         && (hay.contains("empty") || hay.contains("set to \"\""));
                     let is_key_binding = current == "keys" || current.starts_with("keys.");
+                    let color = overlay::is_color(&current, &key);
                     let binding_kind = binding_kind(&current, &key, ty);
                     let accepts_range = binding_kind.is_some()
                         && (value.contains("1..9")
@@ -260,6 +349,8 @@ pub fn parse(text: &str) -> Schema {
                         is_key_binding,
                         binding_kind,
                         accepts_range,
+                        color,
+                        from_overlay: false,
                     });
                 }
                 None => {
@@ -305,8 +396,128 @@ mod tests {
     /// drift whenever herdr *is* present.
     const FIXTURE: &str = include_str!("../fixtures/default-config.toml");
 
+    use crate::check::Kind;
+
     fn real() -> Schema {
         parse(FIXTURE)
+    }
+
+    #[test]
+    fn the_overlay_completes_the_theme_tables() {
+        let s = build(FIXTURE);
+        for table in crate::overlay::THEME_TABLES {
+            let sec = s
+                .sections
+                .iter()
+                .find(|x| x.name == *table)
+                .unwrap_or_else(|| panic!("missing {table}"));
+            let keys: Vec<&str> = sec.items.iter().map(|i| i.key.as_str()).collect();
+            assert_eq!(
+                keys,
+                crate::overlay::THEME_TOKENS.to_vec(),
+                "{table} must expose every token, in the overlay's order"
+            );
+            assert!(sec.items.iter().all(|i| i.color), "all tokens are colors");
+        }
+
+        // `--default-config` documents 7 of 19 in [theme.custom] and 2 of 19
+        // in each of light/dark, so 46 tokens were previously unreachable.
+        let documented = parse(FIXTURE);
+        assert_eq!(documented.item_count, 140);
+        assert_eq!(s.item_count, 186);
+
+        let custom = s
+            .sections
+            .iter()
+            .find(|x| x.name == "theme.custom")
+            .unwrap();
+        let documented_token = custom.items.iter().find(|i| i.key == "accent").unwrap();
+        assert!(!documented_token.from_overlay);
+        assert_eq!(documented_token.default, "\"#f5c2e7\"");
+
+        let added = custom.items.iter().find(|i| i.key == "teal").unwrap();
+        assert!(added.from_overlay);
+        assert_eq!(
+            added.default, "",
+            "there is no default to inherit, only the base theme"
+        );
+    }
+
+    #[test]
+    fn augmenting_twice_changes_nothing() {
+        let mut once = build(FIXTURE);
+        let before = once.item_count;
+        augment(&mut once);
+        assert_eq!(once.item_count, before, "augment must be idempotent");
+    }
+
+    #[test]
+    fn ui_accent_is_a_color_but_its_neighbours_are_not() {
+        let s = build(FIXTURE);
+        let ui = s.sections.iter().find(|x| x.name == "ui").unwrap();
+        assert!(ui.items.iter().find(|i| i.key == "accent").unwrap().color);
+        assert!(
+            !ui.items
+                .iter()
+                .find(|i| i.key == "sidebar_width")
+                .unwrap()
+                .color
+        );
+    }
+
+    /// Every setting must live at a path herdr actually recognises.
+    ///
+    /// This is what caught `accent` being attributed to `[ui.sidebar.spaces]`
+    /// instead of `[ui]`: writing a config that mentions all of them at once
+    /// and letting herdr name the ones it does not know. Skipped when herdr is
+    /// unavailable.
+    #[test]
+    fn every_setting_sits_where_herdr_expects_it() {
+        if crate::check::check_toml("").unavailable.is_some() {
+            eprintln!("herdr not installed; skipping");
+            return;
+        }
+        let schema = build(FIXTURE);
+        let mut lines = Vec::new();
+        let mut count = 0;
+        for sec in &schema.sections {
+            // An array-of-tables cannot be written as a plain table, so it is
+            // covered by its own test instead.
+            if sec.array_of_tables || sec.items.is_empty() {
+                continue;
+            }
+            if !sec.name.is_empty() {
+                lines.push(format!("[{}]", sec.name));
+            }
+            for item in &sec.items {
+                let value = if item.default.is_empty() {
+                    "\"#112233\"".to_string()
+                } else {
+                    item.default.clone()
+                };
+                lines.push(format!("{} = {value}", item.key));
+                count += 1;
+            }
+            lines.push(String::new());
+        }
+
+        let report = crate::check::check_toml(&lines.join("\n"));
+        let misplaced: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .filter(|d| matches!(d.kind, Kind::UnknownKey | Kind::UnknownSection))
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(count > 150, "the sweep must be comprehensive, got {count}");
+        assert!(
+            misplaced.is_empty(),
+            "herdr does not recognise these paths: {misplaced:#?}"
+        );
+        assert!(
+            !report.discards_config,
+            "the sweep must parse: {}",
+            report.raw
+        );
     }
 
     #[test]
