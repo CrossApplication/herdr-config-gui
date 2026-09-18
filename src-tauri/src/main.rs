@@ -31,7 +31,12 @@ fn bootstrap() -> Bootstrap {
 
     let known: Vec<String> = schema
         .as_ref()
-        .map(|s| s.sections.iter().flat_map(|sec| sec.items.iter().map(|i| i.path.clone())).collect())
+        .map(|s| {
+            s.sections
+                .iter()
+                .flat_map(|sec| sec.items.iter().map(|i| i.path.clone()))
+                .collect()
+        })
         .unwrap_or_default();
 
     // An open-ended table (e.g. [theme.custom]) accepts arbitrary keys, so a
@@ -86,7 +91,11 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![bootstrap, preview_edits, save_edits])
+        .invoke_handler(tauri::generate_handler![
+            bootstrap,
+            preview_edits,
+            save_edits
+        ])
         .run(tauri::generate_context!())
         .expect("error while running herdr-config-gui");
 }

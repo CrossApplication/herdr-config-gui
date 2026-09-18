@@ -42,20 +42,69 @@ herdr のバイナリが唯一のスキーマ源なので、herdr が更新さ�
 ## 対応プラットフォーム
 
 herdr の配布に合わせて macOS (x86_64 / aarch64)、Linux (x86_64 / aarch64)、Windows (x86_64)。
-設定ファイルの場所は Linux/macOS が `~/.config/herdr/config.toml`、
-Windows が `%APPDATA%\herdr\config.toml`。
+
+### 設定ファイルの場所は herdr に聞く
+
+`herdr --help` は解決済みのパスを自分で出力する。
+
+```
+Config: /Users/me/.config/herdr/config.toml
+Env:    HERDR_CONFIG_PATH overrides config file path
+```
+
+これを読むので、`HERDR_CONFIG_PATH`・`XDG_CONFIG_HOME`・Windows の `%APPDATA%`
+レイアウトを再実装する必要がない。herdr が見つからないときだけ自前の計算に落ちる
+（`resolve_config_path` が Windows / XDG / `~/.config` の分岐を純粋関数として持ち、
+どの OS 上でもテストできる）。
+
+### 行末を保持する
+
+`toml_edit` は文書を描画するとき改行をすべて LF に正規化する。CRLF のファイルを
+そのまま書き戻すと触っていない行まで差分になるため、読み込み時に行末を検出して
+書き込み時に復元する。Windows でメモ帳が書いた設定ファイルでも 1 項目の変更が
+1 行の差分で済む。
+
+### バイナリの探索
+
+GUI は Finder / Explorer から起動するとシェルの PATH を継承しないため、PATH で
+見つからない場合は各 OS のインストール先を探す。Windows では `.exe` 付きで
+`%LOCALAPPDATA%\Programs\Herdr\bin`、`%USERPROFILE%\.local\bin`、
+それと `%USERPROFILE%\.herdr\packages\standalone\releases` 配下の最新
+バージョンディレクトリを見る。
 
 ## 開発
 
 ```sh
 npm install
 npm run tauri dev        # アプリを起動
+
+npx tsc --noEmit         # 型チェック
 npm test                 # UI ロジックのテスト
-cd src-tauri && cargo test -- --test-threads=1   # スキーマ/書き込みのテスト
+npm run build            # 本番バンドル
+
+cd src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test -- --test-threads=1   # HERDR_CONFIG_PATH を書き換えるテストがあるため単一スレッド
 ```
 
 `HERDR_GUI_DUMP=1` を付けて起動すると、UI に渡す JSON を標準出力に吐いて終了する。
-`HERDR_GUI_CONFIG` で編集対象のファイルを差し替えられる（テスト用）。
+`HERDR_CONFIG_PATH` で編集対象のファイルを差し替えられる。これは herdr 自身の
+環境変数なので、`herdr config check` と `herdr server reload-config` も同じ
+ファイルを対象にする。
+
+### CI
+
+GitHub Actions が ubuntu / macOS / windows の 3 OS で上記すべてを回す。
+ランナーに herdr は入っていないので、スキーマテストは
+`src-tauri/fixtures/default-config.toml`（`herdr --default-config` のスナップショット）
+を読む。herdr が存在する環境では `fixture_matches_installed_herdr` が
+スナップショットのずれを検出し、いない環境では自分でスキップする。
+スナップショットの更新は次のとおり。
+
+```sh
+herdr --default-config > src-tauri/fixtures/default-config.toml
+```
 
 ## 構成
 
@@ -70,6 +119,7 @@ cd src-tauri && cargo test -- --test-threads=1   # スキーマ/書き込みの�
 | `src/problems.ts` | 問題一覧パネル |
 | `src/main.ts` | フォーム描画と保存フロー |
 | `src/resizer.ts` | サイドバーのリサイズ |
+| `src-tauri/fixtures/default-config.toml` | `herdr --default-config` のスナップショット（CI 用） |
 
 ## キーバインド
 
@@ -104,11 +154,11 @@ navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢�
 - `[[keys.command]]` の行追加・削除（単一エントリの項目列挙までは可能）
 - `[theme.custom]` / `[ui.sound.agents]` など開いた辞書への新規キー追加
 - array 型 5 項目はカラーピッカーや構造エディタではなく生 TOML 入力
-- Linux / Windows 未検証。`herdr` バイナリ解決のフォールバック（PATH を継承しない
-  GUI 起動時に `~/.local/bin` や Homebrew を探す経路）も未実行
-- 配布まわり未着手（`.icns` / `.ico` 未生成、release ビルド未実施、CI なし）
-- `herdr config check` は herdr 自身が解決するパスを検証するため、`HERDR_GUI_CONFIG` で
-  別ファイルを編集した場合は実 config を見てしまう
+- Linux / Windows は CI でビルドとテストが通ることまでしか確認していない。実機での
+  ウィンドウ描画、キー録音（WebView2 の `KeyboardEvent`、日本語配列の記号キー）、
+  バイナリ探索のフォールバック、インストーラは未検証
+- 配布まわり未着手（`.icns` / `.ico` 未生成のため `tauri build` でのバンドルは不可、
+  macOS の署名・公証なし）
 - `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
 - 依存の `glib 0.18.5` に moderate の脆弱性報告があるが、Tauri の Linux バックエンド
   (`gtk 0.18` が `glib = "^0.18"` を要求) 経由のため当リポジトリでは上げられない

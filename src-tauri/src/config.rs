@@ -16,19 +16,89 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::herdr;
 
-/// `HERDR_GUI_CONFIG` overrides the target file. Used by tests so they never
-/// touch the real config.
-pub fn config_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("HERDR_GUI_CONFIG") {
-        return Some(PathBuf::from(p));
+/// Line endings of the file being edited.
+///
+/// toml_edit normalizes every newline to LF when it renders a document, which
+/// would rewrite every line of a CRLF file and turn a one-setting change into
+/// a whole-file diff. The original style is detected on read and restored on
+/// write.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Newline {
+    Lf,
+    Crlf,
+}
+
+impl Newline {
+    /// A file written on Windows uses CRLF throughout, so one occurrence is
+    /// enough. A mixed file is normalized to CRLF rather than left ragged.
+    pub fn detect(raw: &str) -> Newline {
+        if raw.contains("\r\n") {
+            Newline::Crlf
+        } else {
+            Newline::Lf
+        }
     }
-    if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("herdr").join("config.toml"))
-    } else if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        Some(PathBuf::from(xdg).join("herdr").join("config.toml"))
+
+    pub fn apply(self, s: &str) -> String {
+        match self {
+            Newline::Lf => s.to_string(),
+            // Collapse first so an already-CRLF newline cannot become CR CR LF.
+            Newline::Crlf => s.replace("\r\n", "\n").replace('\n', "\r\n"),
+        }
+    }
+}
+
+/// The environment that decides where the config lives. Kept separate from the
+/// process so the per-platform rules can be tested on any host.
+#[derive(Clone, Default, Debug)]
+pub struct PathEnv {
+    pub windows: bool,
+    /// `HERDR_CONFIG_PATH`, herdr's own override.
+    pub override_path: Option<PathBuf>,
+    /// `%APPDATA%`, Windows only.
+    pub appdata: Option<PathBuf>,
+    pub xdg_config_home: Option<PathBuf>,
+    pub home: Option<PathBuf>,
+}
+
+impl PathEnv {
+    pub fn from_process() -> Self {
+        Self {
+            windows: cfg!(windows),
+            override_path: std::env::var_os("HERDR_CONFIG_PATH").map(PathBuf::from),
+            appdata: std::env::var_os("APPDATA").map(PathBuf::from),
+            xdg_config_home: std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            home: herdr::home_dir(),
+        }
+    }
+}
+
+/// Fallback for when herdr cannot be asked. Mirrors the rules herdr documents:
+/// `%APPDATA%\herdr\config.toml` on Windows, `$XDG_CONFIG_HOME/herdr` when
+/// set, otherwise `~/.config/herdr`.
+pub fn resolve_config_path(env: &PathEnv) -> Option<PathBuf> {
+    if let Some(p) = &env.override_path {
+        return Some(p.clone());
+    }
+    let dir = if env.windows {
+        env.appdata
+            .clone()
+            .or_else(|| env.home.as_ref().map(|h| h.join("AppData").join("Roaming")))?
+    } else if let Some(xdg) = &env.xdg_config_home {
+        xdg.clone()
     } else {
-        herdr::home_dir().map(|h| h.join(".config").join("herdr").join("config.toml"))
-    }
+        env.home.as_ref()?.join(".config")
+    };
+    Some(dir.join("herdr").join("config.toml"))
+}
+
+/// The file herdr itself reads.
+///
+/// herdr prints its resolved path in `--help`, so we ask instead of guessing:
+/// that already accounts for `HERDR_CONFIG_PATH`, `XDG_CONFIG_HOME` and the
+/// Windows layout. The computed fallback only matters when herdr is missing.
+pub fn config_path() -> Option<PathBuf> {
+    herdr::resolved_config_path().or_else(|| resolve_config_path(&PathEnv::from_process()))
 }
 
 #[derive(Serialize)]
@@ -79,7 +149,11 @@ pub struct SaveResult {
 }
 
 fn join(prefix: &str, key: &str) -> String {
-    if prefix.is_empty() { key.to_string() } else { format!("{prefix}.{key}") }
+    if prefix.is_empty() {
+        key.to_string()
+    } else {
+        format!("{prefix}.{key}")
+    }
 }
 
 fn walk(item: &Item, prefix: &str, out: &mut Vec<(String, String)>) {
@@ -131,7 +205,11 @@ pub fn load() -> ConfigState {
     };
 
     let Some(path) = path else {
-        return empty(false, String::new(), Some("could not resolve a config directory".into()));
+        return empty(
+            false,
+            String::new(),
+            Some("could not resolve a config directory".into()),
+        );
     };
     if !path.is_file() {
         return empty(false, String::new(), None);
@@ -195,7 +273,10 @@ fn prune(tbl: &mut Table) {
 }
 
 pub fn apply_edits(raw: &str, edits: &[Edit]) -> Result<(String, Vec<Change>), String> {
-    let mut doc: DocumentMut = raw.parse().map_err(|e| format!("config.toml is not valid TOML: {e}"))?;
+    let newline = Newline::detect(raw);
+    let mut doc: DocumentMut = raw
+        .parse()
+        .map_err(|e| format!("config.toml is not valid TOML: {e}"))?;
     let before: std::collections::BTreeMap<String, String> = leaves(&doc).into_iter().collect();
     let mut changes = Vec::new();
 
@@ -211,7 +292,12 @@ pub fn apply_edits(raw: &str, edits: &[Edit]) -> Result<(String, Vec<Change>), S
                     .map_err(|e| format!("{}: not a valid TOML value ({text}): {e}", edit.path))?;
                 let normalized = parsed.to_string().trim().to_string();
                 if from.as_deref() == Some(normalized.as_str()) {
-                    changes.push(Change { path: edit.path.clone(), from, to: Some(normalized), action: "noop" });
+                    changes.push(Change {
+                        path: edit.path.clone(),
+                        from,
+                        to: Some(normalized),
+                        action: "noop",
+                    });
                     continue;
                 }
                 let tbl = owner_table(&mut doc, parents)?;
@@ -236,31 +322,53 @@ pub fn apply_edits(raw: &str, edits: &[Edit]) -> Result<(String, Vec<Change>), S
             }
             None => {
                 if from.is_none() {
-                    changes.push(Change { path: edit.path.clone(), from: None, to: None, action: "noop" });
+                    changes.push(Change {
+                        path: edit.path.clone(),
+                        from: None,
+                        to: None,
+                        action: "noop",
+                    });
                     continue;
                 }
                 let tbl = owner_table(&mut doc, parents)?;
                 tbl.remove(key);
-                changes.push(Change { path: edit.path.clone(), from, to: None, action: "remove" });
+                changes.push(Change {
+                    path: edit.path.clone(),
+                    from,
+                    to: None,
+                    action: "remove",
+                });
             }
         }
     }
 
     prune(doc.as_table_mut());
-    Ok((doc.to_string(), changes))
+    Ok((newline.apply(&doc.to_string()), changes))
 }
 
 pub fn preview(edits: Vec<Edit>) -> Preview {
     let state = load();
     match apply_edits(&state.raw, &edits) {
-        Ok((after, changes)) => Preview { changes, after, error: None },
-        Err(e) => Preview { changes: Vec::new(), after: state.raw, error: Some(e) },
+        Ok((after, changes)) => Preview {
+            changes,
+            after,
+            error: None,
+        },
+        Err(e) => Preview {
+            changes: Vec::new(),
+            after: state.raw,
+            error: Some(e),
+        },
     }
 }
 
 pub fn save(edits: Vec<Edit>, reload: bool) -> Result<SaveResult, String> {
     let path = config_path().ok_or("could not resolve a config directory")?;
-    let raw = if path.is_file() { std::fs::read_to_string(&path).map_err(|e| e.to_string())? } else { String::new() };
+    let raw = if path.is_file() {
+        std::fs::read_to_string(&path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
     let (after, changes) = apply_edits(&raw, &edits)?;
 
     if changes.iter().all(|c| c.action == "noop") {
@@ -337,12 +445,16 @@ split_vertical = "prefix+|"
 "#;
 
     fn edit(path: &str, value: Option<&str>) -> Edit {
-        Edit { path: path.into(), value: value.map(|s| s.to_string()) }
+        Edit {
+            path: path.into(),
+            value: value.map(|s| s.to_string()),
+        }
     }
 
     #[test]
     fn updates_only_the_edited_line() {
-        let (after, changes) = apply_edits(SAMPLE, &[edit("keys.prefix", Some("\"ctrl+b\""))]).unwrap();
+        let (after, changes) =
+            apply_edits(SAMPLE, &[edit("keys.prefix", Some("\"ctrl+b\""))]).unwrap();
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].action, "update");
         assert_eq!(changes[0].from.as_deref(), Some("\"ctrl+a\""));
@@ -356,7 +468,8 @@ split_vertical = "prefix+|"
 
     #[test]
     fn preserves_trailing_comments_on_edit() {
-        let (after, _) = apply_edits(SAMPLE, &[edit("ui.status_indicators", Some("\"symbols\""))]).unwrap();
+        let (after, _) =
+            apply_edits(SAMPLE, &[edit("ui.status_indicators", Some("\"symbols\""))]).unwrap();
         assert!(
             after.contains("status_indicators = \"symbols\"   # keep the compact marks"),
             "trailing comment lost:\n{after}"
@@ -376,8 +489,14 @@ split_vertical = "prefix+|"
         let (after, changes) =
             apply_edits(SAMPLE, &[edit("ui.sidebar.agents.row_gap", Some("1"))]).unwrap();
         assert_eq!(changes[0].action, "add");
-        assert!(after.contains("[ui.sidebar.agents]"), "missing leaf header:\n{after}");
-        assert!(!after.contains("[ui.sidebar]\n"), "emitted empty parent header:\n{after}");
+        assert!(
+            after.contains("[ui.sidebar.agents]"),
+            "missing leaf header:\n{after}"
+        );
+        assert!(
+            !after.contains("[ui.sidebar]\n"),
+            "emitted empty parent header:\n{after}"
+        );
         assert!(after.contains("row_gap = 1"));
     }
 
@@ -388,36 +507,237 @@ split_vertical = "prefix+|"
             &[edit("keys.prefix", None), edit("keys.split_vertical", None)],
         )
         .unwrap();
-        assert!(!after.contains("[keys]"), "empty table left behind:\n{after}");
+        assert!(
+            !after.contains("[keys]"),
+            "empty table left behind:\n{after}"
+        );
         assert!(after.contains("[theme]"));
     }
 
     #[test]
     fn rejects_invalid_values_before_touching_the_document() {
-        let err = apply_edits(SAMPLE, &[edit("server.headless_cols", Some("not a number"))]).unwrap_err();
+        let err = apply_edits(
+            SAMPLE,
+            &[edit("server.headless_cols", Some("not a number"))],
+        )
+        .unwrap_err();
         assert!(err.contains("not a valid TOML value"), "{err}");
     }
 
     #[test]
     fn writing_the_same_value_is_a_noop() {
-        let (after, changes) = apply_edits(SAMPLE, &[edit("theme.name", Some("\"terminal\""))]).unwrap();
+        let (after, changes) =
+            apply_edits(SAMPLE, &[edit("theme.name", Some("\"terminal\""))]).unwrap();
         assert_eq!(changes[0].action, "noop");
         assert_eq!(after, SAMPLE);
     }
 
     #[test]
     fn empty_string_is_an_explicit_disable_not_a_removal() {
-        let (after, changes) = apply_edits(SAMPLE, &[edit("keys.split_vertical", Some("\"\""))]).unwrap();
+        let (after, changes) =
+            apply_edits(SAMPLE, &[edit("keys.split_vertical", Some("\"\""))]).unwrap();
         assert_eq!(changes[0].action, "update");
         assert!(after.contains("split_vertical = \"\""));
     }
 }
 
 /// Exercises the real write path (backup, format-preserving write, `herdr
-/// config check`) against a throwaway file via `HERDR_GUI_CONFIG`.
+/// config check`) against a throwaway file via `HERDR_CONFIG_PATH`.
+///
+/// That is herdr's own override rather than one of ours, so the `herdr config
+/// check` this triggers validates the very file we wrote.
 ///
 /// Runs single-threaded because it mutates a process-wide env var; the other
 /// tests in this module call `apply_edits` directly and never read it.
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    fn env() -> PathEnv {
+        PathEnv {
+            windows: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn windows_uses_appdata() {
+        let e = PathEnv {
+            windows: true,
+            appdata: Some(PathBuf::from("C:/Users/me/AppData/Roaming")),
+            home: Some(PathBuf::from("C:/Users/me")),
+            ..env()
+        };
+        assert_eq!(
+            resolve_config_path(&e),
+            Some(
+                PathBuf::from("C:/Users/me/AppData/Roaming")
+                    .join("herdr")
+                    .join("config.toml")
+            )
+        );
+    }
+
+    #[test]
+    fn windows_falls_back_to_the_profile_when_appdata_is_unset() {
+        let e = PathEnv {
+            windows: true,
+            home: Some(PathBuf::from("C:/Users/me")),
+            ..env()
+        };
+        assert_eq!(
+            resolve_config_path(&e),
+            Some(
+                PathBuf::from("C:/Users/me")
+                    .join("AppData")
+                    .join("Roaming")
+                    .join("herdr")
+                    .join("config.toml")
+            )
+        );
+    }
+
+    #[test]
+    fn unix_honors_xdg_config_home() {
+        // Verified against the installed herdr: setting XDG_CONFIG_HOME moves
+        // the path it reports, so we must follow it or edit the wrong file.
+        let e = PathEnv {
+            xdg_config_home: Some(PathBuf::from("/tmp/xdg")),
+            home: Some(PathBuf::from("/home/me")),
+            ..env()
+        };
+        assert_eq!(
+            resolve_config_path(&e),
+            Some(PathBuf::from("/tmp/xdg").join("herdr").join("config.toml"))
+        );
+    }
+
+    #[test]
+    fn unix_defaults_to_dot_config() {
+        let e = PathEnv {
+            home: Some(PathBuf::from("/home/me")),
+            ..env()
+        };
+        assert_eq!(
+            resolve_config_path(&e),
+            Some(
+                PathBuf::from("/home/me/.config")
+                    .join("herdr")
+                    .join("config.toml")
+            )
+        );
+    }
+
+    #[test]
+    fn the_herdr_override_wins_on_every_platform() {
+        for windows in [true, false] {
+            let e = PathEnv {
+                windows,
+                override_path: Some(PathBuf::from("/somewhere/else.toml")),
+                appdata: Some(PathBuf::from("C:/ignored")),
+                xdg_config_home: Some(PathBuf::from("/ignored")),
+                home: Some(PathBuf::from("/home/me")),
+            };
+            assert_eq!(
+                resolve_config_path(&e),
+                Some(PathBuf::from("/somewhere/else.toml"))
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_guessable_without_a_home() {
+        assert_eq!(resolve_config_path(&env()), None);
+        assert_eq!(
+            resolve_config_path(&PathEnv {
+                windows: true,
+                ..env()
+            }),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod newline_tests {
+    use super::*;
+
+    const CRLF: &str = "onboarding = false\r\n\r\n[theme]\r\nname = \"terminal\"\r\n";
+    const LF: &str = "onboarding = false\n\n[theme]\nname = \"terminal\"\n";
+
+    fn edit(path: &str, value: &str) -> Edit {
+        Edit {
+            path: path.into(),
+            value: Some(value.to_string()),
+        }
+    }
+
+    #[test]
+    fn detects_the_style_in_use() {
+        assert_eq!(Newline::detect(CRLF), Newline::Crlf);
+        assert_eq!(Newline::detect(LF), Newline::Lf);
+        assert_eq!(Newline::detect(""), Newline::Lf, "a new file gets LF");
+    }
+
+    #[test]
+    fn a_crlf_file_stays_crlf() {
+        let (after, _) = apply_edits(CRLF, &[edit("theme.name", "\"nord\"")]).unwrap();
+        assert_eq!(
+            after.matches("\r\n").count(),
+            4,
+            "every line ending survives: {after:?}"
+        );
+        assert_eq!(
+            after.matches('\n').count(),
+            after.matches("\r\n").count(),
+            "no bare LF left behind"
+        );
+        assert_eq!(after, CRLF.replace("\"terminal\"", "\"nord\""));
+    }
+
+    #[test]
+    fn an_lf_file_stays_lf() {
+        let (after, _) = apply_edits(LF, &[edit("theme.name", "\"nord\"")]).unwrap();
+        assert!(
+            !after.contains('\r'),
+            "CR must not be introduced: {after:?}"
+        );
+        assert_eq!(after, LF.replace("\"terminal\"", "\"nord\""));
+    }
+
+    #[test]
+    fn a_table_added_to_a_crlf_file_uses_crlf() {
+        let (after, _) = apply_edits(CRLF, &[edit("ui.sidebar_width", "30")]).unwrap();
+        assert!(
+            after.contains("[ui]\r\n"),
+            "new header needs CRLF: {after:?}"
+        );
+        assert!(after.contains("sidebar_width = 30\r\n"));
+        assert!(!after.replace("\r\n", "").contains('\n'));
+    }
+
+    #[test]
+    fn removal_from_a_crlf_file_keeps_the_style() {
+        let (after, _) = apply_edits(
+            CRLF,
+            &[Edit {
+                path: "theme.name".into(),
+                value: None,
+            }],
+        )
+        .unwrap();
+        assert!(!after.contains("name ="));
+        assert!(!after.replace("\r\n", "").contains('\n'));
+    }
+
+    #[test]
+    fn a_mixed_file_is_normalized_rather_than_left_ragged() {
+        let mixed = "a = 1\r\nb = 2\n";
+        let (after, _) = apply_edits(mixed, &[edit("a", "2")]).unwrap();
+        assert_eq!(after, "a = 2\r\nb = 2\r\n");
+    }
+}
+
 #[cfg(test)]
 mod save_tests {
     use super::*;
@@ -429,13 +749,22 @@ mod save_tests {
         let file = dir.join("config.toml");
         let original = "onboarding = false\n\n[theme]\nname = \"terminal\"\nauto_switch = false\n";
         std::fs::write(&file, original).unwrap();
-        std::env::set_var("HERDR_GUI_CONFIG", &file);
+        std::env::set_var("HERDR_CONFIG_PATH", &file);
 
         let result = save(
             vec![
-                Edit { path: "theme.name".into(), value: Some("\"kanagawa\"".into()) },
-                Edit { path: "theme.auto_switch".into(), value: None },
-                Edit { path: "ui.sidebar_width".into(), value: Some("30".into()) },
+                Edit {
+                    path: "theme.name".into(),
+                    value: Some("\"kanagawa\"".into()),
+                },
+                Edit {
+                    path: "theme.auto_switch".into(),
+                    value: None,
+                },
+                Edit {
+                    path: "ui.sidebar_width".into(),
+                    value: Some("30".into()),
+                },
             ],
             false,
         )
@@ -443,18 +772,30 @@ mod save_tests {
 
         let after = std::fs::read_to_string(&file).unwrap();
         assert!(after.contains("name = \"kanagawa\""));
-        assert!(!after.contains("auto_switch"), "removed key still present:\n{after}");
-        assert!(after.contains("[ui]") && after.contains("sidebar_width = 30"), "{after}");
-        assert!(after.starts_with("onboarding = false\n"), "untouched head changed:\n{after}");
+        assert!(
+            !after.contains("auto_switch"),
+            "removed key still present:\n{after}"
+        );
+        assert!(
+            after.contains("[ui]") && after.contains("sidebar_width = 30"),
+            "{after}"
+        );
+        assert!(
+            after.starts_with("onboarding = false\n"),
+            "untouched head changed:\n{after}"
+        );
 
         let actions: Vec<&str> = result.changes.iter().map(|c| c.action).collect();
         assert_eq!(actions, ["update", "remove", "add"]);
 
         let backup = result.backup.expect("backup path");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
-        assert!(result.reloaded.is_none(), "reload must not run when not requested");
+        assert!(
+            result.reloaded.is_none(),
+            "reload must not run when not requested"
+        );
 
-        std::env::remove_var("HERDR_GUI_CONFIG");
+        std::env::remove_var("HERDR_CONFIG_PATH");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

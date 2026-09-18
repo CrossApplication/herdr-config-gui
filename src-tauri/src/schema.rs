@@ -200,7 +200,12 @@ pub fn parse(text: &str) -> Schema {
 
         if let Some(c) = re_kv.captures(body) {
             let key = c[1].to_string();
-            let value = c.get(2).map(|m| m.as_str()).unwrap_or("").trim().to_string();
+            let value = c
+                .get(2)
+                .map(|m| m.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let trailing = c.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
 
             let sec_idx = sections.iter().position(|s| s.name == current).unwrap_or(0);
@@ -227,7 +232,9 @@ pub fn parse(text: &str) -> Schema {
                     }
                     let hay = format!("{} {}", doc_block.join(" "), trailing).to_lowercase();
                     let optional = value == "\"\""
-                        && (hay.contains("optional") || hay.contains("unset") || hay.contains("disable"));
+                        && (hay.contains("optional")
+                            || hay.contains("unset")
+                            || hay.contains("disable"));
                     let empty_disables = ty == "string"
                         && value != "\"\""
                         && (hay.contains("empty") || hay.contains("set to \"\""));
@@ -281,19 +288,40 @@ pub fn parse(text: &str) -> Schema {
     sections.retain(|s| !(s.items.is_empty() && s.hints.is_empty()));
     let item_count = sections.iter().map(|s| s.items.len()).sum();
     let hint_count = sections.iter().map(|s| s.hints.len()).sum();
-    Schema { sections, item_count, hint_count }
+    Schema {
+        sections,
+        item_count,
+        hint_count,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Parse the real `herdr --default-config` output from the installed
-    /// binary. These counts pin the behaviours we care about; if a future
-    /// herdr release changes them, the schema is meant to follow along, but
-    /// the structural invariants below must keep holding.
+    /// A committed snapshot of `herdr --default-config`, so the suite runs on
+    /// machines (and CI runners) without herdr installed. The counts below pin
+    /// the behaviours we care about; `fixture_matches_installed_herdr` catches
+    /// drift whenever herdr *is* present.
+    const FIXTURE: &str = include_str!("../fixtures/default-config.toml");
+
     fn real() -> Schema {
-        parse(&crate::herdr::default_config().expect("herdr --default-config"))
+        parse(FIXTURE)
+    }
+
+    #[test]
+    fn fixture_matches_installed_herdr() {
+        let Ok(live) = crate::herdr::default_config() else {
+            eprintln!("herdr not installed; skipping drift check");
+            return;
+        };
+        assert_eq!(
+            live.replace("\r\n", "\n"),
+            FIXTURE.replace("\r\n", "\n"),
+            "fixtures/default-config.toml is stale. Refresh it with:\n  \
+             herdr --default-config > src-tauri/fixtures/default-config.toml\n\
+             then update the counts in these tests if the schema really changed."
+        );
     }
 
     #[test]
@@ -303,7 +331,13 @@ mod tests {
         // 24 bracketed headers plus the root pseudo-section holding `onboarding`.
         assert_eq!(s.sections.len(), 25, "sections");
         let root = s.sections.iter().find(|x| x.name.is_empty()).unwrap();
-        assert_eq!(root.items.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(), ["onboarding"]);
+        assert_eq!(
+            root.items
+                .iter()
+                .map(|i| i.path.as_str())
+                .collect::<Vec<_>>(),
+            ["onboarding"]
+        );
     }
 
     #[test]
@@ -336,8 +370,15 @@ mod tests {
         // `rows` lives under [ui.sidebar.agents], not under [ui].
         let ui = s.sections.iter().find(|x| x.name == "ui").unwrap();
         assert!(!ui.items.iter().any(|i| i.key == "rows"));
-        let agents = s.sections.iter().find(|x| x.name == "ui.sidebar.agents").unwrap();
-        assert!(agents.items.iter().any(|i| i.path == "ui.sidebar.agents.rows"));
+        let agents = s
+            .sections
+            .iter()
+            .find(|x| x.name == "ui.sidebar.agents")
+            .unwrap();
+        assert!(agents
+            .items
+            .iter()
+            .any(|i| i.path == "ui.sidebar.agents.rows"));
     }
 
     #[test]
@@ -349,7 +390,13 @@ mod tests {
         let prefix = keys.items.iter().find(|i| i.key == "prefix").unwrap();
         assert_eq!(prefix.default, "\"ctrl+b\"");
         // Bindings that ship unset are offered as "optional", not as "".
-        assert!(keys.items.iter().find(|i| i.key == "open_worktree").unwrap().optional);
+        assert!(
+            keys.items
+                .iter()
+                .find(|i| i.key == "open_worktree")
+                .unwrap()
+                .optional
+        );
     }
 
     #[test]
@@ -365,7 +412,10 @@ mod tests {
 
         assert_eq!(get("keys.prefix").binding_kind, Some("prefix"));
         assert_eq!(get("keys.split_vertical").binding_kind, Some("action"));
-        assert_eq!(get("keys.navigate_pane_left").binding_kind, Some("navigate"));
+        assert_eq!(
+            get("keys.navigate_pane_left").binding_kind,
+            Some("navigate")
+        );
         assert_eq!(get("keys.indexed.tabs").binding_kind, Some("indexed"));
         assert_eq!(get("keys.command.key").binding_kind, Some("command"));
 
@@ -427,7 +477,11 @@ mod tests {
 
         // Settings that already default to "" need no such action.
         let term = s.sections.iter().find(|x| x.name == "terminal").unwrap();
-        let shell = term.items.iter().find(|i| i.key == "default_shell").unwrap();
+        let shell = term
+            .items
+            .iter()
+            .find(|i| i.key == "default_shell")
+            .unwrap();
         assert!(shell.optional || shell.default == "\"\"");
         assert!(!shell.empty_disables);
     }
@@ -438,7 +492,10 @@ mod tests {
         let term = s.sections.iter().find(|x| x.name == "terminal").unwrap();
         let mode = term.items.iter().find(|i| i.key == "shell_mode").unwrap();
         for want in ["auto", "login", "non_login"] {
-            assert!(mode.enum_candidates.contains(&want.to_string()), "missing {want}");
+            assert!(
+                mode.enum_candidates.contains(&want.to_string()),
+                "missing {want}"
+            );
         }
     }
 
@@ -459,7 +516,11 @@ mod tests {
     #[test]
     fn array_of_tables_is_marked() {
         let s = real();
-        let cmd = s.sections.iter().find(|x| x.name == "keys.command").unwrap();
+        let cmd = s
+            .sections
+            .iter()
+            .find(|x| x.name == "keys.command")
+            .unwrap();
         assert!(cmd.array_of_tables);
         assert!(cmd.commented);
         assert_eq!(cmd.items.len(), 5);
