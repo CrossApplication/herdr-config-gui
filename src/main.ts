@@ -9,10 +9,12 @@ import {
   type Section,
 } from "./types";
 import { openCapture } from "./capture";
+import { openProblems, problemSummary, type ProblemsHost } from "./problems";
 import {
   conflicts as findConflicts,
   risk,
   validate,
+  type BindingInfo,
   type Conflict,
   type Entry,
   type Kind,
@@ -74,6 +76,18 @@ function bindingEntries(): Entry[] {
     .map((i) => ({ path: i.path, value: bindingText(i), kind: i.binding_kind as Kind }));
 }
 
+/** Same as bindingEntries, plus the range flag the validator needs. */
+function bindingInfos(): BindingInfo[] {
+  return allItems()
+    .filter((i) => i.binding_kind)
+    .map((i) => ({
+      path: i.path,
+      value: bindingText(i),
+      kind: i.binding_kind as Kind,
+      acceptsRange: i.accepts_range,
+    }));
+}
+
 const allConflicts = (): Conflict[] => findConflicts(bindingEntries());
 const conflictsFor = (path: string) => allConflicts().filter((c) => c.paths.includes(path));
 
@@ -121,6 +135,49 @@ async function capture(path: string) {
   setEdit(path, JSON.stringify(next));
   renderBody();
 }
+
+/** Jump to a setting's row from anywhere and make it obvious which one it is. */
+function focusRow(path: string) {
+  const idx = boot.schema!.sections.findIndex((s) => s.items.some((i) => i.path === path));
+  if (idx < 0) return;
+  active = idx;
+  filter = "";
+  onlyDirty = false;
+  (el("filter") as HTMLInputElement).value = "";
+  render();
+  const row = el("items").querySelector<HTMLElement>(`[data-row="${path}"]`);
+  if (!row) return;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 1600);
+}
+
+function stateLabel(path: string): string {
+  if (isDirty(path)) return "未保存";
+  switch (stateOf(path)) {
+    case "inherit":
+      return "既定";
+    case "disabled":
+      return "無効";
+    default:
+      return "設定済み";
+  }
+}
+
+const problemsHost = (): ProblemsHost => ({
+  bindings: bindingInfos,
+  valueOf: (path) => {
+    const item = findItem(path);
+    return item ? bindingText(item) : "";
+  },
+  stateLabel,
+  onFocus: focusRow,
+  onCapture: capture,
+  onDisable: (path) => {
+    setEdit(path, EMPTY);
+    renderBody();
+  },
+});
 
 // --- row decorations -------------------------------------------------------
 
@@ -284,17 +341,13 @@ function refreshRow(path: string) {
 }
 
 function renderHeaderCounts() {
-  const clashes = allConflicts();
-  const cEl = el("conflicts");
-  if (clashes.length) {
-    cEl.className = "on";
-    cEl.innerHTML = `キー衝突 <em>${clashes.length}</em>`;
-    cEl.title = clashes.map((c) => `${c.chord}: ${c.paths.join(" / ")}`).join("\n");
-  } else {
-    cEl.className = "";
-    cEl.textContent = "キー衝突 なし";
-    cEl.title = "";
-  }
+  const { total, errors } = problemSummary(problemsHost());
+  const pEl = el("problems") as HTMLButtonElement;
+  pEl.className = errors ? "has-error" : total ? "has-warn" : "";
+  pEl.innerHTML = total
+    ? `キー設定の問題 <em>${total}</em>`
+    : "キー設定の問題 なし";
+  pEl.title = total ? "クリックで内容と直し方を表示" : "問題は見つかっていません";
 
   const n = dirtyPaths().length;
   const btn = el("only-dirty") as HTMLButtonElement;
@@ -455,6 +508,7 @@ async function main() {
     if (filter) onlyDirty = false;
     render();
   };
+  el("problems").onclick = () => openProblems(problemsHost());
   el("only-dirty").onclick = () => {
     onlyDirty = !onlyDirty;
     if (onlyDirty) {

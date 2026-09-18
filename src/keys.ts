@@ -226,8 +226,9 @@ export function risk(text: string, kind: Kind): Risk {
 export const scopeOf = (kind: Kind): "global" | "navigate" =>
   kind === "navigate" ? "navigate" : "global";
 
+export type Scope = "global" | "navigate";
 export type Entry = { path: string; value: string; kind: Kind };
-export type Conflict = { chord: string; scope: "global" | "navigate"; paths: string[] };
+export type Conflict = { chord: string; scope: Scope; paths: string[] };
 
 /**
  * Bindings occupying the same chord in the same scope. Ranges are expanded, so
@@ -235,6 +236,7 @@ export type Conflict = { chord: string; scope: "global" | "navigate"; paths: str
  */
 export function conflicts(entries: Entry[]): Conflict[] {
   const seen = new Map<string, Conflict>();
+
 
   for (const e of entries) {
     const p = parse(e.value);
@@ -252,6 +254,62 @@ export function conflicts(entries: Entry[]): Conflict[] {
     .filter((g) => g.paths.length > 1)
     .sort((a, b) => a.chord.localeCompare(b.chord));
 }
+
+// --- problem report --------------------------------------------------------
+
+export type BindingInfo = Entry & { acceptsRange: boolean };
+
+/**
+ * One actionable problem. `paths` names every setting involved, so the UI can
+ * offer to jump to, rebind or clear each side of a conflict.
+ */
+export type Problem = {
+  kind: "invalid" | "conflict" | "risky";
+  severity: "error" | "warn";
+  /** The chord or raw value at issue. */
+  chord: string;
+  paths: string[];
+  detail: string;
+  scope?: Scope;
+};
+
+/**
+ * Everything wrong with the effective keybindings, worst first: values herdr
+ * would reject, then chords claimed twice, then chords the outer terminal may
+ * never deliver.
+ */
+export function problems(bindings: BindingInfo[]): Problem[] {
+  const out: Problem[] = [];
+
+  for (const b of bindings) {
+    for (const detail of validate(b.value, b.kind, b.acceptsRange)) {
+      out.push({ kind: "invalid", severity: "error", chord: b.value, paths: [b.path], detail });
+    }
+  }
+
+  for (const c of conflicts(bindings)) {
+    out.push({
+      kind: "conflict",
+      severity: "error",
+      chord: c.chord,
+      scope: c.scope,
+      paths: c.paths,
+      detail: `${c.paths.length} 個の設定が同じキーに割り当たっています`,
+    });
+  }
+
+  for (const b of bindings) {
+    if (b.value.trim() === "") continue;
+    const r = risk(b.value, b.kind);
+    if (r.level === "risky") {
+      out.push({ kind: "risky", severity: "warn", chord: b.value, paths: [b.path], detail: r.reason });
+    }
+  }
+
+  return out;
+}
+
+export const errorCount = (ps: Problem[]) => ps.filter((p) => p.severity === "error").length;
 
 // --- capture ---------------------------------------------------------------
 

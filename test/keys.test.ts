@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   canonical,
   conflicts,
+  errorCount,
+  problems,
   expand,
   fromEvent,
   parse,
@@ -275,4 +277,83 @@ test("the fixture really covers every binding family", () => {
   const kinds = new Set(fixture.bindings.map((b) => b.kind));
   assert.deepEqual([...kinds].sort(), ["action", "command", "indexed", "navigate", "prefix"]);
   assert.equal(fixture.bindings.length, 58);
+});
+
+// --- problem report --------------------------------------------------------
+
+const info = (path: string, value: string, kind: Kind = "action", acceptsRange = false) => ({
+  path,
+  value,
+  kind,
+  acceptsRange,
+});
+
+test("problems are ordered worst first", () => {
+  const ps = problems([
+    info("keys.remote_image_paste", "cmd+v"), // risky
+    info("keys.new_tab", "prefix+c"),
+    info("keys.close_pane", "prefix+c"), // conflict
+    info("keys.navigate_pane_up", "esc", "navigate"), // invalid
+  ]);
+  assert.deepEqual(
+    ps.map((p) => p.kind),
+    ["invalid", "conflict", "risky"]
+  );
+  assert.equal(errorCount(ps), 2, "risky is a warning, not an error");
+});
+
+test("a conflict names every setting involved so each can be fixed", () => {
+  const ps = problems([
+    info("keys.workspace_picker", "prefix+w"),
+    info("keys.next_workspace", "prefix+w"),
+  ]);
+  assert.equal(ps.length, 1);
+  assert.equal(ps[0].kind, "conflict");
+  assert.equal(ps[0].chord, "prefix+w");
+  assert.deepEqual(ps[0].paths, ["keys.workspace_picker", "keys.next_workspace"]);
+  assert.equal(ps[0].scope, "global");
+});
+
+test("clearing one side of a conflict resolves it", () => {
+  const before = problems([
+    info("keys.workspace_picker", "prefix+w"),
+    info("keys.next_workspace", "prefix+w"),
+  ]);
+  assert.equal(before.length, 1);
+  const after = problems([
+    info("keys.workspace_picker", "prefix+w"),
+    info("keys.next_workspace", ""),
+  ]);
+  assert.deepEqual(after, []);
+});
+
+test("an unset binding raises nothing at all", () => {
+  assert.deepEqual(problems([info("keys.last_pane", ""), info("keys.next_agent", "   ")]), []);
+});
+
+test("the bindings herdr ships raise no problems", () => {
+  const ps = problems(
+    fixture.bindings.map((b) => ({
+      path: b.path,
+      value: b.default,
+      kind: b.kind as Kind,
+      acceptsRange: b.acceptsRange,
+    }))
+  );
+  assert.deepEqual(ps, [], "a clean install must show an empty problem list");
+});
+
+test("the live conflict this feature was built for is reported", () => {
+  // The user added next_workspace = "prefix+w"; workspace_picker already had it.
+  const ps = problems(
+    fixture.bindings.map((b) => ({
+      path: b.path,
+      value: b.path === "keys.next_workspace" ? "prefix+w" : b.default,
+      kind: b.kind as Kind,
+      acceptsRange: b.acceptsRange,
+    }))
+  );
+  assert.equal(ps.length, 1);
+  assert.equal(ps[0].chord, "prefix+w");
+  assert.deepEqual(ps[0].paths.sort(), ["keys.next_workspace", "keys.workspace_picker"]);
 });
