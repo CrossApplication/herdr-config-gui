@@ -109,23 +109,27 @@ fn overlay_item(section: &str, key: &str) -> Item {
 /// `[theme.custom]` shows seven of nineteen color tokens; the rest are real
 /// settings herdr accepts (each one probed in `overlay`'s tests) that the form
 /// could otherwise never reach.
+fn section_index(schema: &mut Schema, name: &str) -> usize {
+    match schema.sections.iter().position(|s| s.name == name) {
+        Some(i) => i,
+        None => {
+            schema.sections.push(Section {
+                name: name.to_string(),
+                line: 0,
+                commented: true,
+                array_of_tables: false,
+                doc: Vec::new(),
+                items: Vec::new(),
+                hints: Vec::new(),
+            });
+            schema.sections.len() - 1
+        }
+    }
+}
+
 pub fn augment(schema: &mut Schema) {
     for table in overlay::THEME_TABLES {
-        let idx = match schema.sections.iter().position(|s| s.name == *table) {
-            Some(i) => i,
-            None => {
-                schema.sections.push(Section {
-                    name: table.to_string(),
-                    line: 0,
-                    commented: true,
-                    array_of_tables: false,
-                    doc: Vec::new(),
-                    items: Vec::new(),
-                    hints: Vec::new(),
-                });
-                schema.sections.len() - 1
-            }
-        };
+        let idx = section_index(schema, table);
         let section = &mut schema.sections[idx];
         for token in overlay::THEME_TOKENS {
             if !section.items.iter().any(|i| i.key == *token) {
@@ -141,6 +145,34 @@ pub fn augment(schema: &mut Schema) {
                 .unwrap_or(usize::MAX)
         });
     }
+
+    // Settings herdr accepts but never documents.
+    for extra in overlay::EXTRA_SETTINGS {
+        let idx = section_index(schema, extra.section);
+        let section = &mut schema.sections[idx];
+        if section.items.iter().any(|i| i.key == extra.key) {
+            continue;
+        }
+        section.items.push(Item {
+            line: 0,
+            path: format!("{}.{}", extra.section, extra.key),
+            section: extra.section.to_string(),
+            key: extra.key.to_string(),
+            ty: extra.ty.to_string(),
+            default: String::new(),
+            doc: vec![extra.doc.to_string()],
+            trailing: String::new(),
+            enum_candidates: extra.enum_values.iter().map(|s| s.to_string()).collect(),
+            optional: false,
+            empty_disables: false,
+            is_key_binding: extra.binding_kind.is_some(),
+            binding_kind: extra.binding_kind,
+            accepts_range: false,
+            color: overlay::is_color(extra.section, extra.key),
+            from_overlay: true,
+        });
+    }
+
     schema.item_count = schema.sections.iter().map(|s| s.items.len()).sum();
 }
 
@@ -424,7 +456,10 @@ mod tests {
         // in each of light/dark, so 46 tokens were previously unreachable.
         let documented = parse(FIXTURE);
         assert_eq!(documented.item_count, 140);
-        assert_eq!(s.item_count, 186);
+        assert_eq!(
+            s.item_count, 192,
+            "140 documented + 46 theme tokens + 6 undocumented"
+        );
 
         let custom = s
             .sections
@@ -441,6 +476,55 @@ mod tests {
             added.default, "",
             "there is no default to inherit, only the base theme"
         );
+    }
+
+    #[test]
+    fn the_overlay_adds_the_settings_herdr_does_not_document() {
+        let s = build(FIXTURE);
+        let keys = s.sections.iter().find(|x| x.name == "keys").unwrap();
+
+        // Documented [keys] holds 54; the overlay adds five more.
+        assert_eq!(keys.items.len(), 59);
+        for key in [
+            "swap_pane_left",
+            "swap_pane_down",
+            "swap_pane_up",
+            "swap_pane_right",
+            "copy_mode",
+        ] {
+            let item = keys
+                .items
+                .iter()
+                .find(|i| i.key == key)
+                .unwrap_or_else(|| panic!("missing {key}"));
+            assert!(item.from_overlay);
+            // They must reach the key capture and conflict machinery.
+            assert_eq!(item.binding_kind, Some("action"));
+            assert!(item.is_key_binding);
+            assert!(!item.accepts_range);
+        }
+
+        // `fullscreen` is a legacy alias of `zoom` and must stay out.
+        assert!(!keys.items.iter().any(|i| i.key == "fullscreen"));
+
+        let ui = s.sections.iter().find(|x| x.name == "ui").unwrap();
+        let scope = ui
+            .items
+            .iter()
+            .find(|i| i.key == "agent_panel_scope")
+            .unwrap();
+        assert_eq!(scope.enum_candidates, ["current", "all"]);
+        assert!(scope.from_overlay);
+
+        // `advanced.scrollback_lines` is an alias of `scrollback_limit_bytes`,
+        // not a separate setting: herdr reports `duplicate field` when both
+        // are present, so offering it would produce a config herdr refuses.
+        let adv = s.sections.iter().find(|x| x.name == "advanced").unwrap();
+        assert!(!adv.items.iter().any(|i| i.key == "scrollback_lines"));
+        assert!(adv
+            .items
+            .iter()
+            .any(|i| i.key == "scrollback_limit_bytes" && !i.from_overlay));
     }
 
     #[test]
@@ -490,10 +574,19 @@ mod tests {
                 lines.push(format!("[{}]", sec.name));
             }
             for item in &sec.items {
-                let value = if item.default.is_empty() {
-                    "\"#112233\"".to_string()
-                } else {
+                // Overlay items have no documented default, so pick something
+                // of the right shape: an enum member, a number, or a color.
+                let value = if !item.default.is_empty() {
                     item.default.clone()
+                } else if let Some(first) = item.enum_candidates.first() {
+                    format!("\"{first}\"")
+                } else {
+                    match item.ty.as_str() {
+                        "integer" => "0".to_string(),
+                        "float" => "0.0".to_string(),
+                        "bool" => "false".to_string(),
+                        _ => "\"#112233\"".to_string(),
+                    }
                 };
                 lines.push(format!("{} = {value}", item.key));
                 count += 1;

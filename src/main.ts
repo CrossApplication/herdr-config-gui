@@ -276,6 +276,10 @@ function renderItem(item: Item): string {
   const doc = [...item.doc, item.trailing].filter(Boolean).join(" ");
   const badges = [`<span class="badge">${item.ty}</span>`];
   if (item.is_key_binding) badges.push(`<span class="badge key">key</span>`);
+  if (item.from_overlay)
+    badges.push(
+      `<span class="badge ov" title="herdr --default-config には載っていませんが、herdr が受け付ける設定です">未文書</span>`
+    );
 
   return `
     <div class="item ${stateOf(item.path)}${isDirty(item.path) ? " is-dirty" : ""}" data-row="${esc(item.path)}">

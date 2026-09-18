@@ -378,3 +378,4 @@ input.swatch:hover { border-color: var(--accent); }
   display: inline-block; width: 11px; height: 11px; border-radius: 3px;
   border: 1px solid var(--faint); vertical-align: -1px;
 }
+.badge.ov { color: #cba6f7; border-color: #cba6f7; cursor: help; }

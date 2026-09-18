@@ -57,6 +57,46 @@ Env:    HERDR_CONFIG_PATH overrides config file path
 （`resolve_config_path` が Windows / XDG / `~/.config` の分岐を純粋関数として持ち、
 どの OS 上でもテストできる）。
 
+### herdr に検証させる
+
+`herdr config check` は合否だけでなく、認識できないセクションとキー、期待する型、
+enum のメンバーまで報告する。`HERDR_CONFIG_PATH` を一時ファイルに向けて実行すれば、
+まだ書いていない内容を検証できるので、保存は「書く前に検証」する。
+
+判定で重要なのは出力末尾の `; using defaults` の有無である。未知のキーは無視されて
+他の設定は有効になるが、型や構文のエラーは **設定ファイル全体が破棄されて既定値に
+戻る**。後者は保存を中止する。
+
+この仕組みは別名の検出にも使える。名前とその別名を同時に書くと herdr は
+`duplicate field` を報告するため、「未文書の設定」と「既存設定の別名」を区別できる
+（`keys.fullscreen` は `zoom` の、`advanced.scrollback_lines` は
+`scrollback_limit_bytes` の別名だった）。
+
+### 手書きのオーバーレイ層
+
+`--default-config` はドキュメントであってスキーマではない。テーブルのメンバーを
+全部並べるのではなく一部を例示する。その穴を `src-tauri/src/overlay.rs` が埋める。
+
+- `[theme.custom]` と light/dark が受け付けるカラートークン **19 個**
+  （`--default-config` の記載は 7 個と 2 個ずつ）
+- herdr が受理するのに文書化されていない設定 **6 個**
+  （`keys.swap_pane_*`、`keys.copy_mode`、`ui.agent_panel_scope`）
+
+このファイルのテストは全ての名前を実際の herdr に問い合わせ、でっち上げの名前が
+拒否されることも確認する。enum のメンバーは herdr が報告した値と一致するか比較する。
+つまりオーバーレイは黙って現実からずれない。
+
+さらに `schema` のテストが全設定を一括で書き出して herdr に検証させる。これは実際に
+`accent` の誤配属を検出した（コメントアウトされたセクションヘッダの有効範囲が
+無限に続き、`[ui]` の `accent` が `ui.sidebar.spaces.accent` になっていた）。
+
+### 色は自前で検証する
+
+herdr は色を一切検証しない。`accent = "notacolor"` は `config check` を通り、その後
+黙って無視される。そのため GUI 側で 16 進 / `rgb()` / 名前付き色 / `reset` を判定する。
+ただし herdr が受け付ける「名前」の一覧は文書化されていないため、知らない名前は
+警告せず受け入れる。動くかもしれない値を警告するほうが害が大きい。
+
 ### 行末を保持する
 
 `toml_edit` は文書を描画するとき改行をすべて LF に正規化する。CRLF のファイルを
@@ -111,6 +151,8 @@ herdr --default-config > src-tauri/fixtures/default-config.toml
 | ファイル | 役割 |
 | --- | --- |
 | `src-tauri/src/schema.rs` | `--default-config` の行指向パーサ |
+| `src-tauri/src/overlay.rs` | 手書きのオーバーレイ（未文書のキー・カラートークン） |
+| `src-tauri/src/check.rs` | `herdr config check` の実行と診断の解析 |
 | `src-tauri/src/config.rs` | `config.toml` の読み書き（最小差分） |
 | `src-tauri/src/herdr.rs` | herdr バイナリの解決と実行 |
 | `src/state.ts` | 編集状態モデル（DOM 非依存・テスト対象） |
@@ -119,6 +161,7 @@ herdr --default-config > src-tauri/fixtures/default-config.toml
 | `src/problems.ts` | 問題一覧パネル |
 | `src/main.ts` | フォーム描画と保存フロー |
 | `src/resizer.ts` | サイドバーのリサイズ |
+| `src/color.ts` | 色値の判定とスウォッチ変換（DOM 非依存・テスト対象） |
 | `src-tauri/fixtures/default-config.toml` | `herdr --default-config` のスナップショット（CI 用） |
 
 ## キーバインド
@@ -152,8 +195,11 @@ navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢�
 ## 既知の未実装
 
 - `[[keys.command]]` の行追加・削除（単一エントリの項目列挙までは可能）
-- `[theme.custom]` / `[ui.sound.agents]` など開いた辞書への新規キー追加
-- array 型 5 項目はカラーピッカーや構造エディタではなく生 TOML 入力
+- `[ui.sidebar.agents.rows_by_agent]` への新規キー追加。任意のキーを受け付ける
+  テーブルはここだけで（`[theme.custom]` は 19 個の固定トークン、
+  `[ui.sound.agents]` はエージェント名の固定集合）、自由入力の UI が必要
+- array 型 5 項目は構造エディタではなく生 TOML 入力。特に
+  `ui.sidebar.agents.rows` は「行 × トークン」の二次元配列で手打ちは辛い
 - Linux / Windows は CI でビルドとテストが通ることまでしか確認していない。実機での
   ウィンドウ描画、キー録音（WebView2 の `KeyboardEvent`、日本語配列の記号キー）、
   バイナリ探索のフォールバック、インストーラは未検証

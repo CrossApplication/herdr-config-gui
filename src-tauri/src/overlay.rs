@@ -38,6 +38,86 @@ pub const THEME_TOKENS: &[&str] = &[
 /// Tables that take the full token set.
 pub const THEME_TABLES: &[&str] = &["theme.custom", "theme.custom.light", "theme.custom.dark"];
 
+/// A setting herdr accepts that `--default-config` never mentions.
+///
+/// Each one was found in the binary's config struct and confirmed with
+/// `herdr config check`, which also reported the type and, for enums, the
+/// members. There is no documented default, so an empty field means "leave it
+/// to herdr" exactly as it does for a color token.
+pub struct Extra {
+    pub section: &'static str,
+    pub key: &'static str,
+    /// `string` | `integer` | `bool`, matching schema::Item::ty.
+    pub ty: &'static str,
+    /// Our own description: herdr documents none of these.
+    pub doc: &'static str,
+    /// Members herdr listed when it rejected a bad value.
+    pub enum_values: &'static [&'static str],
+    /// Set for keybindings so they get capture, validation and conflicts.
+    pub binding_kind: Option<&'static str>,
+}
+
+/// Aliases are deliberately absent. `keys.fullscreen` is described in
+/// `--default-config` as a legacy alias of `zoom`, and `advanced.
+/// scrollback_lines` turned out to be one for `scrollback_limit_bytes`:
+/// setting a name and its alias together makes herdr report `duplicate
+/// field`, which is how an alias can be told apart from a real setting that
+/// merely happens to be undocumented. Offering both names for one value would
+/// let the form write a config herdr refuses outright.
+///
+/// `schema`'s attribution sweep writes every setting at once, so it fails if
+/// an alias ever slips into this list.
+pub const EXTRA_SETTINGS: &[Extra] = &[
+    Extra {
+        section: "keys",
+        key: "swap_pane_left",
+        ty: "string",
+        doc: "Swap the focused pane with the pane to its left.",
+        enum_values: &[],
+        binding_kind: Some("action"),
+    },
+    Extra {
+        section: "keys",
+        key: "swap_pane_down",
+        ty: "string",
+        doc: "Swap the focused pane with the pane below it.",
+        enum_values: &[],
+        binding_kind: Some("action"),
+    },
+    Extra {
+        section: "keys",
+        key: "swap_pane_up",
+        ty: "string",
+        doc: "Swap the focused pane with the pane above it.",
+        enum_values: &[],
+        binding_kind: Some("action"),
+    },
+    Extra {
+        section: "keys",
+        key: "swap_pane_right",
+        ty: "string",
+        doc: "Swap the focused pane with the pane to its right.",
+        enum_values: &[],
+        binding_kind: Some("action"),
+    },
+    Extra {
+        section: "keys",
+        key: "copy_mode",
+        ty: "string",
+        doc: "Enter copy mode in the focused pane.",
+        enum_values: &[],
+        binding_kind: Some("action"),
+    },
+    Extra {
+        section: "ui",
+        key: "agent_panel_scope",
+        ty: "string",
+        doc: "Which agents the agent panel lists.",
+        enum_values: &["current", "all"],
+        binding_kind: None,
+    },
+];
+
 /// Settings whose value is a color, so the form can offer a picker.
 ///
 /// herdr does not validate colors at all -- `accent = "notacolor"` passes
@@ -83,6 +163,64 @@ mod tests {
         let r = probe("theme.custom", "definitely_not_a_token");
         assert!(!r.ok);
         assert_eq!(r.diagnostics[0].kind, check::Kind::UnknownKey);
+    }
+
+    #[test]
+    fn every_extra_setting_is_accepted_by_herdr() {
+        if check::check_toml("").unavailable.is_some() {
+            eprintln!("herdr not installed; skipping");
+            return;
+        }
+        for e in EXTRA_SETTINGS {
+            // A value of the wrong type proves the key exists and tells us the
+            // type herdr wants, which is how these were found in the first
+            // place. An unknown key is reported differently.
+            let r = check::check_toml(&format!("[{}]\n{} = 0.5\n", e.section, e.key));
+            let unknown = r
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == check::Kind::UnknownKey);
+            assert!(
+                !unknown,
+                "herdr does not know [{}] {}: {}",
+                e.section,
+                e.key,
+                r.raw.replace('\n', " ")
+            );
+        }
+    }
+
+    #[test]
+    fn extra_enum_members_match_what_herdr_reports() {
+        if check::check_toml("").unavailable.is_some() {
+            return;
+        }
+        for e in EXTRA_SETTINGS.iter().filter(|e| !e.enum_values.is_empty()) {
+            let r = check::check_toml(&format!(
+                "[{}]\n{} = \"definitely-not-a-member\"\n",
+                e.section, e.key
+            ));
+            let reported = &r.diagnostics[0].allowed;
+            assert_eq!(
+                reported,
+                &e.enum_values.to_vec(),
+                "[{}] {} members drifted",
+                e.section,
+                e.key
+            );
+        }
+    }
+
+    #[test]
+    fn extras_do_not_duplicate_a_documented_setting() {
+        let documented = crate::schema::parse(include_str!("../fixtures/default-config.toml"));
+        for e in EXTRA_SETTINGS {
+            let clash = documented
+                .sections
+                .iter()
+                .any(|s| s.name == e.section && s.items.iter().any(|i| i.key == e.key));
+            assert!(!clash, "[{}] {} is already documented", e.section, e.key);
+        }
     }
 
     #[test]
