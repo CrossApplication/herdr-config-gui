@@ -337,3 +337,30 @@ button.ghost.rec:hover { background: var(--accent); color: #11111b; }
   15%, 60% { background: rgba(137, 180, 250, 0.22); }
 }
 .item.flash { animation: row-flash 1.6s ease-in-out; }
+
+/* ---------- herdr config check report ---------- */
+.ck { font-size: 11px; line-height: 1.7; margin: 4px 0; }
+.ck.ok { color: var(--set); }
+.ck.warn { color: var(--warn); }
+.ck.bad { color: var(--red); font-weight: 600; }
+.ck.note { color: var(--dim); }
+.ck.bad b { color: var(--red); }
+.ck-rows { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 6px; }
+.ck-row {
+  font-size: 11px; line-height: 1.7; padding: 4px 8px; border-radius: 5px;
+  background: var(--row); border-left: 2px solid var(--faint);
+}
+.ck-row.error { border-left-color: var(--red); }
+.ck-row.warning { border-left-color: var(--warn); }
+.ck-row code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg); border-radius: 4px; padding: 0 5px; color: var(--text);
+}
+.ck-badge {
+  display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 6px;
+  border-radius: 8px; margin-right: 4px;
+}
+.ck-row.error .ck-badge { background: var(--red); color: #11111b; }
+.ck-row.warning .ck-badge { background: var(--warn); color: #11111b; }
+.ck-line { color: var(--dim); }
+.ck-msg { color: var(--faint); }

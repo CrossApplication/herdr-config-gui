@@ -1,0 +1,4 @@
+config: issues found
+unknown config section [bogus_section]; ignoring section
+unknown config key theme.custom.totally_bogus_token; ignoring key
+__EXIT__=1

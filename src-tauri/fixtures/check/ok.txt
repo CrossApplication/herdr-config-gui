@@ -1,0 +1,2 @@
+config: ok
+__EXIT__=0

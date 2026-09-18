@@ -123,6 +123,24 @@ pub fn run(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Run herdr against a specific config file and capture its report whether or
+/// not it succeeds. `herdr config check` exits non-zero when it finds issues,
+/// and that output is exactly what we want to read.
+pub fn run_against_config(args: &[&str], config: &std::path::Path) -> Result<String, String> {
+    let exe = resolve().ok_or_else(|| "herdr executable not found".to_string())?;
+    let out = Command::new(&exe)
+        .args(args)
+        .env("HERDR_CONFIG_PATH", config)
+        .output()
+        .map_err(|e| format!("failed to run {}: {e}", exe.display()))?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.trim().is_empty() {
+        text.push_str(&err);
+    }
+    Ok(text)
+}
+
 pub fn version() -> Option<String> {
     run(&["--version"]).ok().map(|s| s.trim().to_string())
 }

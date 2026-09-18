@@ -1,0 +1,8 @@
+config: issues found
+config parse error: TOML parse error at line 2, column 17
+  |
+2 | sidebar_width = "not a number"
+  |                 ^^^^^^^^^^^^^^
+invalid type: string "not a number", expected u16
+; using defaults
+__EXIT__=1

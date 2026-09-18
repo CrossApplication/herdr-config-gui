@@ -1,0 +1,8 @@
+config: issues found
+config parse error: TOML parse error at line 2, column 10
+  |
+2 | claude = "loud"
+  |          ^^^^^^
+unknown variant `loud`, expected one of `default`, `on`, `off`
+; using defaults
+__EXIT__=1

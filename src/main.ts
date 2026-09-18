@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  isFatal,
   toDisplay,
   type Bootstrap,
+  type CheckReport,
   type Change,
   type Item,
   type Preview,
@@ -371,8 +373,12 @@ function renderBar(extra: string | null = null) {
     render(null);
   };
   el("btn-preview").onclick = async () => {
-    const p = await invoke<Preview>("preview_edits", { edits: payload() });
-    renderBar(p.error ? `<span class="bad">${esc(p.error)}</span>` : changeList(p.changes));
+    const p = await invoke<Preview>("check_edits", { edits: payload() });
+    renderBar(
+      p.error
+        ? `<span class="bad">${esc(p.error)}</span>`
+        : changeList(p.changes) + checkReport(p.check)
+    );
   };
   el("btn-save").onclick = doSave;
 }
@@ -439,6 +445,40 @@ function bindWidgets() {
   };
 }
 
+const DIAG_LABEL: Record<string, string> = {
+  unknown_section: "未知のセクション",
+  unknown_key: "未知のキー",
+  type: "型が不正",
+  variant: "値が不正",
+  syntax: "構文エラー",
+  other: "その他",
+};
+
+/** What herdr said about the candidate config, in the user's terms. */
+function checkReport(c: CheckReport | null): string {
+  if (!c) return "";
+  if (c.unavailable) return `<div class="ck note">herdr で検証できませんでした: ${esc(c.unavailable)}</div>`;
+  if (c.ok) return `<div class="ck ok">herdr config check: 問題なし</div>`;
+
+  const rows = c.diagnostics.map((d) => {
+    const bits: string[] = [
+      `<span class="ck-badge ${d.severity}">${DIAG_LABEL[d.kind] ?? d.kind}</span>`,
+    ];
+    if (d.path) bits.push(`<code>${esc(d.path)}</code>`);
+    if (d.line) bits.push(`<span class="ck-line">${d.line} 行目</span>`);
+    if (d.expected) bits.push(`期待される型: <code>${esc(d.expected)}</code>`);
+    if (d.allowed.length)
+      bits.push(`使える値: ${d.allowed.map((a) => `<code>${esc(a)}</code>`).join(" / ")}`);
+    bits.push(`<span class="ck-msg">${esc(d.message)}</span>`);
+    return `<div class="ck-row ${d.severity}">${bits.join(" ")}</div>`;
+  });
+
+  const head = c.discards_config
+    ? `<div class="ck bad">この内容では herdr が<b>設定ファイル全体を破棄して既定値に戻します</b>。保存はできません。</div>`
+    : `<div class="ck warn">herdr が無視する項目があります（他の設定は有効です）。</div>`;
+  return head + `<div class="ck-rows">${rows.join("")}</div>`;
+}
+
 function changeList(changes: Change[]): string {
   const rows = changes
     .filter((c) => c.action !== "noop")
@@ -460,23 +500,30 @@ async function doSave() {
     renderBar(`<span class="bad">保存失敗: ${esc(String(e))}</span>`);
     return;
   }
-  const notes = [
-    `<span class="${r.check_ok ? "ok" : "bad"}">config check: ${esc(
-      r.check_output || (r.check_ok ? "ok" : "failed")
-    )}</span>`,
-  ];
+  // The pre-flight check refused it: nothing was written, so keep the edits.
+  if (!r.written && isFatal(r.check)) {
+    renderBar(
+      `<div class="ck bad">保存を中止しました。編集内容はそのまま残っています。</div>` +
+        checkReport(r.check) +
+        changeList(r.changes)
+    );
+    return;
+  }
+
+  const notes: string[] = [];
   if (r.reloaded !== null)
     notes.push(
       `<span class="${r.reloaded ? "ok" : "bad"}">reload: ${esc(
-        r.reload_output || (r.reloaded ? "ok" : "failed")
+        r.reload_output || (r.reloaded ? "ok" : "失敗")
       )}</span>`
     );
   if (r.backup) notes.push(`<span class="dim">backup: ${esc(r.backup)}</span>`);
+  if (!r.written) notes.push(`<span class="dim">${esc(r.reload_output || "書き込みなし")}</span>`);
 
   boot.config = (await invoke<Bootstrap>("bootstrap")).config;
   store = newStore(boot.config.values);
   onlyDirty = false;
-  render(`${changeList(r.changes)}${notes.join(" · ")}`);
+  render(`${changeList(r.changes)}${checkReport(r.check)}${notes.join(" · ")}`);
 }
 
 async function main() {

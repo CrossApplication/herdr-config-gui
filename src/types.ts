@@ -47,16 +47,44 @@ export type Change = {
   to: string | null;
   action: "add" | "update" | "remove" | "noop";
 };
-export type Preview = { changes: Change[]; after: string; error: string | null };
+/** One thing `herdr config check` said about a candidate config. */
+export type Diagnostic = {
+  severity: "error" | "warning";
+  kind: "unknown_section" | "unknown_key" | "type" | "variant" | "syntax" | "other";
+  message: string;
+  path: string | null;
+  line: number | null;
+  expected: string | null;
+  allowed: string[];
+};
+export type CheckReport = {
+  ok: boolean;
+  /** herdr would fall back to defaults for the whole file. */
+  discards_config: boolean;
+  diagnostics: Diagnostic[];
+  raw: string;
+  /** Set when herdr could not be run at all. */
+  unavailable: string | null;
+};
+export type Preview = {
+  changes: Change[];
+  after: string;
+  error: string | null;
+  check: CheckReport | null;
+};
 export type SaveResult = {
   path: string;
+  /** False when the pre-flight check refused the content. */
+  written: boolean;
   backup: string | null;
   changes: Change[];
-  check_ok: boolean;
-  check_output: string;
+  check: CheckReport;
   reloaded: boolean | null;
   reload_output: string;
 };
+
+export const isFatal = (c: CheckReport | null): boolean =>
+  !!c && (c.discards_config || c.diagnostics.some((d) => d.severity === "error"));
 
 /** TOML source text -> value shown in the widget. */
 export function toDisplay(text: string, ty: Item["ty"]): string {

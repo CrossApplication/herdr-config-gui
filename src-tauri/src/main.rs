@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod check;
 mod config;
 mod herdr;
 mod schema;
@@ -77,6 +78,12 @@ fn preview_edits(edits: Vec<config::Edit>) -> config::Preview {
     config::preview(edits)
 }
 
+/// Validate a candidate config without writing it.
+#[tauri::command]
+fn check_edits(edits: Vec<config::Edit>) -> config::Preview {
+    config::preview(edits)
+}
+
 #[tauri::command]
 fn save_edits(edits: Vec<config::Edit>, reload: bool) -> Result<config::SaveResult, String> {
     config::save(edits, reload)
@@ -94,6 +101,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             preview_edits,
+            check_edits,
             save_edits
         ])
         .run(tauri::generate_context!())

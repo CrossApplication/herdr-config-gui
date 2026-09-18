@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use toml_edit::{DocumentMut, Item, Table, Value};
 
+use crate::check::{self, CheckReport};
 use crate::herdr;
 
 /// Line endings of the file being edited.
@@ -135,15 +136,18 @@ pub struct Preview {
     pub changes: Vec<Change>,
     pub after: String,
     pub error: Option<String>,
+    /// What herdr says about the candidate content, before anything is written.
+    pub check: Option<CheckReport>,
 }
 
 #[derive(Serialize)]
 pub struct SaveResult {
     pub path: String,
+    /// False when the pre-flight check refused the content.
+    pub written: bool,
     pub backup: Option<String>,
     pub changes: Vec<Change>,
-    pub check_ok: bool,
-    pub check_output: String,
+    pub check: CheckReport,
     pub reloaded: Option<bool>,
     pub reload_output: String,
 }
@@ -349,15 +353,21 @@ pub fn apply_edits(raw: &str, edits: &[Edit]) -> Result<(String, Vec<Change>), S
 pub fn preview(edits: Vec<Edit>) -> Preview {
     let state = load();
     match apply_edits(&state.raw, &edits) {
-        Ok((after, changes)) => Preview {
-            changes,
-            after,
-            error: None,
-        },
+        Ok((after, changes)) => {
+            // Ask herdr about the candidate content before anything is written.
+            let check = check::check_toml(&after);
+            Preview {
+                changes,
+                after,
+                error: None,
+                check: Some(check),
+            }
+        }
         Err(e) => Preview {
             changes: Vec::new(),
             after: state.raw,
             error: Some(e),
+            check: None,
         },
     }
 }
@@ -371,19 +381,35 @@ pub fn save(edits: Vec<Edit>, reload: bool) -> Result<SaveResult, String> {
     };
     let (after, changes) = apply_edits(&raw, &edits)?;
 
-    if changes.iter().all(|c| c.action == "noop") {
+    let nothing_to_do = changes.iter().all(|c| c.action == "noop");
+    if nothing_to_do {
         return Ok(SaveResult {
             path: path.display().to_string(),
+            written: false,
             backup: None,
             changes,
-            check_ok: true,
-            check_output: "no changes to write".into(),
+            check: check::parse_output("config: ok"),
+            reloaded: None,
+            reload_output: "no changes to write".into(),
+        });
+    }
+
+    // Ask herdr about the exact bytes we are about to write. A type or syntax
+    // error would make herdr discard the whole file, silently reverting every
+    // setting the user has, so that must never reach disk.
+    let check = check::check_toml(&after);
+    if check.fatal() {
+        return Ok(SaveResult {
+            path: path.display().to_string(),
+            written: false,
+            backup: None,
+            changes,
+            check,
             reloaded: None,
             reload_output: String::new(),
         });
     }
 
-    // Always keep the previous revision before overwriting.
     let backup = if path.is_file() {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -401,12 +427,7 @@ pub fn save(edits: Vec<Edit>, reload: bool) -> Result<SaveResult, String> {
 
     std::fs::write(&path, &after).map_err(|e| format!("write failed: {e}"))?;
 
-    let (check_ok, check_output) = match herdr::run(&["config", "check"]) {
-        Ok(o) => (true, o.trim().to_string()),
-        Err(e) => (false, e),
-    };
-
-    let (reloaded, reload_output) = if reload && check_ok {
+    let (reloaded, reload_output) = if reload {
         match herdr::run(&["server", "reload-config"]) {
             Ok(o) => (Some(true), o.trim().to_string()),
             Err(e) => (Some(false), e),
@@ -417,15 +438,23 @@ pub fn save(edits: Vec<Edit>, reload: bool) -> Result<SaveResult, String> {
 
     Ok(SaveResult {
         path: path.display().to_string(),
+        written: true,
         backup,
         changes,
-        check_ok,
-        check_output,
+        check,
         reloaded,
         reload_output,
     })
 }
 
+/// Exercises the real write path (backup, format-preserving write, `herdr
+/// config check`) against a throwaway file via `HERDR_CONFIG_PATH`.
+///
+/// That is herdr's own override rather than one of ours, so the `herdr config
+/// check` this triggers validates the very file we wrote.
+///
+/// Runs single-threaded because it mutates a process-wide env var; the other
+/// tests in this module call `apply_edits` directly and never read it.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,14 +570,6 @@ split_vertical = "prefix+|"
     }
 }
 
-/// Exercises the real write path (backup, format-preserving write, `herdr
-/// config check`) against a throwaway file via `HERDR_CONFIG_PATH`.
-///
-/// That is herdr's own override rather than one of ours, so the `herdr config
-/// check` this triggers validates the very file we wrote.
-///
-/// Runs single-threaded because it mutates a process-wide env var; the other
-/// tests in this module call `apply_edits` directly and never read it.
 #[cfg(test)]
 mod path_tests {
     use super::*;
@@ -738,6 +759,14 @@ mod newline_tests {
     }
 }
 
+/// Exercises the real write path (backup, format-preserving write, `herdr
+/// config check`) against a throwaway file via `HERDR_CONFIG_PATH`.
+///
+/// That is herdr's own override rather than one of ours, so the `herdr config
+/// check` this triggers validates the very file we wrote.
+///
+/// Runs single-threaded because it mutates a process-wide env var; the other
+/// tests in this module call `apply_edits` directly and never read it.
 #[cfg(test)]
 mod save_tests {
     use super::*;
@@ -794,6 +823,67 @@ mod save_tests {
             result.reloaded.is_none(),
             "reload must not run when not requested"
         );
+
+        std::env::remove_var("HERDR_CONFIG_PATH");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A value herdr cannot parse makes it discard the entire config, so such
+    /// content must never reach disk. Skipped when herdr is unavailable,
+    /// because the refusal comes from herdr's own verdict.
+    #[test]
+    fn a_config_herdr_would_reject_is_never_written() {
+        let dir = std::env::temp_dir().join(format!("herdr-gui-reject-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config.toml");
+        let original = "[theme]\nname = \"terminal\"\n";
+        std::fs::write(&file, original).unwrap();
+        std::env::set_var("HERDR_CONFIG_PATH", &file);
+
+        // sidebar_width is a u16; a string breaks the whole file.
+        let result = save(
+            vec![Edit {
+                path: "ui.sidebar_width".into(),
+                value: Some("\"wide\"".into()),
+            }],
+            false,
+        )
+        .expect("save must report, not error out");
+
+        if result.check.unavailable.is_some() {
+            eprintln!("herdr not installed; skipping");
+            std::env::remove_var("HERDR_CONFIG_PATH");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+
+        assert!(!result.written, "fatal content must not be written");
+        assert!(result.check.fatal());
+        assert!(
+            result.check.discards_config,
+            "herdr would fall back to defaults"
+        );
+        assert_eq!(result.backup, None, "nothing was overwritten, so no backup");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            original,
+            "the file on disk is untouched"
+        );
+
+        // An unknown key is only ignored by herdr, so it is written.
+        let ok = save(
+            vec![Edit {
+                path: "theme.custom.not_a_real_token".into(),
+                value: Some("\"#ff0000\"".into()),
+            }],
+            false,
+        )
+        .expect("save");
+        assert!(ok.written, "a warning must not block the save");
+        assert!(!ok.check.fatal());
+        assert!(std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("not_a_real_token"));
 
         std::env::remove_var("HERDR_CONFIG_PATH");
         std::fs::remove_dir_all(&dir).ok();
