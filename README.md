@@ -65,13 +65,50 @@ cd src-tauri && cargo test -- --test-threads=1   # スキーマ/書き込みの�
 | `src-tauri/src/config.rs` | `config.toml` の読み書き（最小差分） |
 | `src-tauri/src/herdr.rs` | herdr バイナリの解決と実行 |
 | `src/state.ts` | 編集状態モデル（DOM 非依存・テスト対象） |
+| `src/keys.ts` | キー構文の正規化・検証・衝突検出（DOM 非依存・テスト対象） |
+| `src/capture.ts` | キー録音モーダル |
+| `src/problems.ts` | 問題一覧パネル |
 | `src/main.ts` | フォーム描画と保存フロー |
 | `src/resizer.ts` | サイドバーのリサイズ |
 
+## キーバインド
+
+`[keys]` 系の 58 項目は実際のキー入力で設定する。prefix モードのバインドは
+prefix キーを実際に押してから目的のキーを押す（ダイアログが設定中の prefix を
+認識して `prefix+<chord>` に折り畳む）。Esc と Enter 自体もバインドできるよう、
+録音中は全キーを飲み込み、確定後に Esc = キャンセル / Enter = 確定へ切り替わる。
+
+`KeyboardEvent` の読み方は文字種で変える必要がある。
+
+| 対象 | 使う値 | 理由 |
+| --- | --- | --- |
+| 英字・数字 | `ev.code` | shift で大文字化し、macOS では alt が合成文字に変える |
+| 記号 | `ev.key` | 端末が送るのは文字そのもの。`shift+7` は `&` として届き、herdr の名前は `ampersand` |
+
+herdr は種別ごとに違う構文規則を持つため、`schema.rs` が各項目を prefix /
+action / navigate / indexed / command に分類し、`1..9` レンジを取るかを記録する。
+navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢印 /
+修飾なし 1〜9 を使えない。
+
+衝突検出は既定値を含む実効設定を横断する。レンジは 9 チョードに展開するので
+`prefix+1..9` は手書きの `prefix+3` と衝突する。修飾キーの順序は無視する
+（herdr 自身のドキュメントが `ctrl+shift+alt+left` と `alt+shift+left` の
+両方を書いている）。navigate モードは別スコープとして扱う。これをしないと
+同梱デフォルトだけで 6 件の誤検出が出る。
+
+構文エラー・衝突・端末が届けにくいキーは「キー設定の問題」パネルに深刻な順で
+並び、各項目から該当行へのジャンプ・再録音・無効化ができる。
+
 ## 既知の未実装
 
-- keys のキーバインドが実キー入力ではなくテキスト入力
-- `[[keys.command]]` の行追加・削除
-- `[theme.custom]` など開いた辞書への新規キー追加
+- `[[keys.command]]` の行追加・削除（単一エントリの項目列挙までは可能）
+- `[theme.custom]` / `[ui.sound.agents]` など開いた辞書への新規キー追加
+- array 型 5 項目はカラーピッカーや構造エディタではなく生 TOML 入力
+- Linux / Windows 未検証。`herdr` バイナリ解決のフォールバック（PATH を継承しない
+  GUI 起動時に `~/.local/bin` や Homebrew を探す経路）も未実行
+- 配布まわり未着手（`.icns` / `.ico` 未生成、release ビルド未実施、CI なし）
 - `herdr config check` は herdr 自身が解決するパスを検証するため、`HERDR_GUI_CONFIG` で
   別ファイルを編集した場合は実 config を見てしまう
+- `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
+- 依存の `glib 0.18.5` に moderate の脆弱性報告があるが、Tauri の Linux バックエンド
+  (`gtk 0.18` が `glib = "^0.18"` を要求) 経由のため当リポジトリでは上げられない
