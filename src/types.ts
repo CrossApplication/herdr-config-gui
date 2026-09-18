@@ -11,6 +11,8 @@ export type Item = {
   optional: boolean;
   empty_disables: boolean;
   is_key_binding: boolean;
+  binding_kind: "prefix" | "action" | "navigate" | "indexed" | "command" | null;
+  accepts_range: boolean;
 };
 export type Hint = { line: number; name: string; description: string };
 export type Section = {

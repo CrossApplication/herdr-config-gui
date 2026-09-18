@@ -1,0 +1,354 @@
+{
+  "_comment": "Every keybinding herdr ships, taken from `herdr --default-config`. Regenerate with: HERDR_GUI_DUMP=1 src-tauri/target/debug/herdr-config-gui",
+  "herdrVersion": "herdr 0.9.0",
+  "bindings": [
+    {
+      "path": "keys.prefix",
+      "kind": "prefix",
+      "default": "ctrl+b",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.help",
+      "kind": "action",
+      "default": "prefix+?",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.settings",
+      "kind": "action",
+      "default": "prefix+s",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.detach",
+      "kind": "action",
+      "default": "prefix+q",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.reload_config",
+      "kind": "action",
+      "default": "prefix+shift+r",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.open_notification_target",
+      "kind": "action",
+      "default": "prefix+o",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.workspace_picker",
+      "kind": "action",
+      "default": "prefix+w",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.goto",
+      "kind": "action",
+      "default": "prefix+g",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.new_workspace",
+      "kind": "action",
+      "default": "prefix+shift+n",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.new_worktree",
+      "kind": "action",
+      "default": "prefix+shift+g",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.open_worktree",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.remove_worktree",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.rename_workspace",
+      "kind": "action",
+      "default": "prefix+shift+w",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.close_workspace",
+      "kind": "action",
+      "default": "prefix+shift+d",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.previous_workspace",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.next_workspace",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.previous_agent",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.next_agent",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.focus_agent",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": true
+    },
+    {
+      "path": "keys.remote_image_paste",
+      "kind": "action",
+      "default": "ctrl+v",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.new_tab",
+      "kind": "action",
+      "default": "prefix+c",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.rename_tab",
+      "kind": "action",
+      "default": "prefix+shift+t",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.previous_tab",
+      "kind": "action",
+      "default": "prefix+p",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.next_tab",
+      "kind": "action",
+      "default": "prefix+n",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.move_tab_previous",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.move_tab_next",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.switch_tab",
+      "kind": "action",
+      "default": "prefix+1..9",
+      "acceptsRange": true
+    },
+    {
+      "path": "keys.switch_workspace",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": true
+    },
+    {
+      "path": "keys.close_tab",
+      "kind": "action",
+      "default": "prefix+shift+x",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.rename_pane",
+      "kind": "action",
+      "default": "prefix+shift+p",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.edit_scrollback",
+      "kind": "action",
+      "default": "prefix+e",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.focus_pane_left",
+      "kind": "action",
+      "default": "prefix+h",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.focus_pane_down",
+      "kind": "action",
+      "default": "prefix+j",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.focus_pane_up",
+      "kind": "action",
+      "default": "prefix+k",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.focus_pane_right",
+      "kind": "action",
+      "default": "prefix+l",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.cycle_pane_next",
+      "kind": "action",
+      "default": "prefix+tab",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.cycle_pane_previous",
+      "kind": "action",
+      "default": "prefix+shift+tab",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.last_pane",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.split_vertical",
+      "kind": "action",
+      "default": "prefix+v",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.split_horizontal",
+      "kind": "action",
+      "default": "prefix+minus",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.close_pane",
+      "kind": "action",
+      "default": "prefix+x",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.zoom",
+      "kind": "action",
+      "default": "prefix+z",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.resize_mode",
+      "kind": "action",
+      "default": "prefix+r",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.resize_pane_left",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.resize_pane_down",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.resize_pane_up",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.resize_pane_right",
+      "kind": "action",
+      "default": "",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.toggle_sidebar",
+      "kind": "action",
+      "default": "prefix+b",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.navigate_workspace_up",
+      "kind": "navigate",
+      "default": "up",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.navigate_workspace_down",
+      "kind": "navigate",
+      "default": "down",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.navigate_pane_left",
+      "kind": "navigate",
+      "default": "h",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.navigate_pane_down",
+      "kind": "navigate",
+      "default": "j",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.navigate_pane_up",
+      "kind": "navigate",
+      "default": "k",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.navigate_pane_right",
+      "kind": "navigate",
+      "default": "l",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.command.key",
+      "kind": "command",
+      "default": "prefix+alt+g",
+      "acceptsRange": false
+    },
+    {
+      "path": "keys.indexed.tabs",
+      "kind": "indexed",
+      "default": "",
+      "acceptsRange": true
+    },
+    {
+      "path": "keys.indexed.workspaces",
+      "kind": "indexed",
+      "default": "",
+      "acceptsRange": true
+    },
+    {
+      "path": "keys.indexed.agents",
+      "kind": "indexed",
+      "default": "",
+      "acceptsRange": true
+    }
+  ]
+}

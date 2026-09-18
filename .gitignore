@@ -10,3 +10,6 @@ src-tauri/gen/
 
 # macOS
 .DS_Store
+
+# bundled test output
+.test-build/

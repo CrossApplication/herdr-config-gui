@@ -187,3 +187,72 @@ button.ghost:hover { color: var(--text); border-color: var(--accent); }
 .act.add { color: var(--set); }
 .act.update { color: var(--accent); }
 .act.remove { color: var(--red); }
+
+/* ---------- keybinding annotations ---------- */
+#conflicts { flex: none; font-size: 11px; color: var(--faint); }
+#conflicts.on { color: var(--red); cursor: help; }
+#conflicts em {
+  font-style: normal; font-weight: 700; background: var(--red); color: #11111b;
+  border-radius: 8px; padding: 0 6px; margin-left: 2px;
+}
+button.ghost.rec { border-color: var(--accent); color: var(--accent); }
+button.ghost.rec:hover { background: var(--accent); color: #11111b; }
+
+.keynote:empty { display: none; }
+.keynote { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.kn {
+  font-size: 10px; padding: 1px 7px; border-radius: 9px;
+  border: 1px solid var(--faint); color: var(--dim);
+}
+.kn.safe { color: var(--set); border-color: var(--set); }
+.kn.caution { color: var(--warn); border-color: var(--warn); }
+.kn.risky { color: #fab387; border-color: #fab387; }
+.kn.err { color: var(--red); border-color: var(--red); font-weight: 700; }
+.kn.warn { color: var(--red); border-color: var(--red); }
+.kn.none { color: var(--faint); border-style: dashed; }
+
+/* ---------- capture modal ---------- */
+.capture-back {
+  position: fixed; inset: 0; z-index: 50; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(17, 17, 27, 0.72); backdrop-filter: blur(2px);
+}
+.capture {
+  width: min(560px, calc(100vw - 32px)); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; padding: 18px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+.cap-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; font-weight: 600; color: var(--accent);
+}
+.cap-hint { color: var(--dim); font-size: 12px; margin-top: 6px; line-height: 1.6; }
+.cap-chord {
+  margin: 14px 0; padding: 18px 12px; text-align: center; border-radius: 8px;
+  background: var(--row); border: 1px dashed var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px; font-weight: 700; color: var(--text); word-break: break-all;
+}
+.cap-chord.current { font-size: 15px; color: var(--dim); font-weight: 400; }
+.cap-chord.armed { border-style: solid; border-color: var(--accent); color: var(--accent); }
+.cap-chord.safe { border-style: solid; border-color: var(--set); }
+.cap-chord.caution { border-style: solid; border-color: var(--warn); }
+.cap-chord.risky { border-style: solid; border-color: #fab387; }
+.cap-chord.bad { border-style: solid; border-color: var(--red); color: var(--red); }
+.cap-notes { display: flex; flex-direction: column; gap: 5px; min-height: 22px; }
+.cap-note { font-size: 11px; color: var(--dim); line-height: 1.6; }
+.cap-note b { margin-right: 5px; }
+.cap-note.safe b { color: var(--set); }
+.cap-note.caution b { color: var(--warn); }
+.cap-note.risky b { color: #fab387; }
+.cap-note.err { color: var(--red); }
+.cap-note.warn { color: var(--red); }
+.cap-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.cap-spacer { flex: 1; }
+.cap-actions button {
+  background: var(--row); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 12px; font: inherit; cursor: pointer;
+}
+.cap-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.cap-actions button:disabled { opacity: 0.35; cursor: default; }
+.cap-actions button.primary { background: var(--accent); color: #11111b; border-color: var(--accent); font-weight: 600; }

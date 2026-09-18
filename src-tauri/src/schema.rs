@@ -34,6 +34,14 @@ pub struct Item {
     /// explicitly, which "clear the field to inherit the default" cannot do.
     pub empty_disables: bool,
     pub is_key_binding: bool,
+    /// Which set of syntax rules applies to this binding, if it is one.
+    /// `prefix` the prefix chord itself, `action` a normal prefix-mode or
+    /// direct binding, `navigate` a plain key that only applies while
+    /// navigate mode is open, `indexed` a modifier-only value driving 1..9,
+    /// `command` the key of a `[[keys.command]]` entry.
+    pub binding_kind: Option<&'static str>,
+    /// Accepts the `1..9` range form (e.g. `switch_tab = "prefix+1..9"`).
+    pub accepts_range: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -93,6 +101,29 @@ fn documented_alternatives(doc: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+/// herdr applies different syntax rules per binding family, and the rules are
+/// stated in prose rather than machine-readable form, so they are keyed off
+/// the table and key name here.
+fn binding_kind(section: &str, key: &str, ty: &str) -> Option<&'static str> {
+    if ty != "string" {
+        return None;
+    }
+    match section {
+        "keys" => Some(if key == "prefix" {
+            "prefix"
+        } else if key.starts_with("navigate_") {
+            "navigate"
+        } else {
+            "action"
+        }),
+        "keys.indexed" => Some("indexed"),
+        // `[[keys.command]]` also holds type/command/width/height, which are
+        // not bindings.
+        "keys.command" => (key == "key").then_some("command"),
+        _ => None,
+    }
 }
 
 fn quoted_literals(doc: &[String]) -> Vec<String> {
@@ -201,6 +232,11 @@ pub fn parse(text: &str) -> Schema {
                         && value != "\"\""
                         && (hay.contains("empty") || hay.contains("set to \"\""));
                     let is_key_binding = current == "keys" || current.starts_with("keys.");
+                    let binding_kind = binding_kind(&current, &key, ty);
+                    let accepts_range = binding_kind.is_some()
+                        && (value.contains("1..9")
+                            || hay.contains("indexed binding")
+                            || binding_kind == Some("indexed"));
 
                     sections[sec_idx].items.push(Item {
                         line: line_no,
@@ -215,6 +251,8 @@ pub fn parse(text: &str) -> Schema {
                         optional,
                         empty_disables,
                         is_key_binding,
+                        binding_kind,
+                        accepts_range,
                     });
                 }
                 None => {
@@ -312,6 +350,64 @@ mod tests {
         assert_eq!(prefix.default, "\"ctrl+b\"");
         // Bindings that ship unset are offered as "optional", not as "".
         assert!(keys.items.iter().find(|i| i.key == "open_worktree").unwrap().optional);
+    }
+
+    #[test]
+    fn classifies_binding_families() {
+        let s = real();
+        let get = |path: &str| {
+            s.sections
+                .iter()
+                .flat_map(|sec| sec.items.iter())
+                .find(|i| i.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"))
+        };
+
+        assert_eq!(get("keys.prefix").binding_kind, Some("prefix"));
+        assert_eq!(get("keys.split_vertical").binding_kind, Some("action"));
+        assert_eq!(get("keys.navigate_pane_left").binding_kind, Some("navigate"));
+        assert_eq!(get("keys.indexed.tabs").binding_kind, Some("indexed"));
+        assert_eq!(get("keys.command.key").binding_kind, Some("command"));
+
+        // The other `[[keys.command]]` fields are not bindings.
+        for k in ["type", "command", "width", "height"] {
+            assert_eq!(get(&format!("keys.command.{k}")).binding_kind, None, "{k}");
+        }
+        // Nothing outside the keys tables is a binding.
+        assert_eq!(get("theme.name").binding_kind, None);
+
+        let navigate: Vec<&str> = s
+            .sections
+            .iter()
+            .flat_map(|sec| sec.items.iter())
+            .filter(|i| i.binding_kind == Some("navigate"))
+            .map(|i| i.key.as_str())
+            .collect();
+        assert_eq!(navigate.len(), 6, "navigate-mode bindings: {navigate:?}");
+    }
+
+    #[test]
+    fn flags_bindings_that_accept_the_1_to_9_range() {
+        let s = real();
+        let ranged: Vec<&str> = s
+            .sections
+            .iter()
+            .flat_map(|sec| sec.items.iter())
+            .filter(|i| i.accepts_range)
+            .map(|i| i.path.as_str())
+            .collect();
+        assert_eq!(
+            ranged,
+            [
+                // Declaration order in the default config.
+                "keys.focus_agent",
+                "keys.switch_tab",
+                "keys.switch_workspace",
+                "keys.indexed.tabs",
+                "keys.indexed.workspaces",
+                "keys.indexed.agents",
+            ]
+        );
     }
 
     #[test]

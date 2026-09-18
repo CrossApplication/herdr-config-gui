@@ -8,6 +8,15 @@ import {
   type SaveResult,
   type Section,
 } from "./types";
+import { openCapture } from "./capture";
+import {
+  conflicts as findConflicts,
+  risk,
+  validate,
+  type Conflict,
+  type Entry,
+  type Kind,
+} from "./keys";
 import { installResizer } from "./resizer";
 import {
   EMPTY,
@@ -50,6 +59,69 @@ function findItem(path: string): Item | undefined {
   return allItems().find((i) => i.path === path);
 }
 
+// --- keybindings -----------------------------------------------------------
+
+/** Effective binding text (edits, then file, then herdr's default). */
+function bindingText(item: Item): string {
+  const v = effective(item.path);
+  return toDisplay(v === null ? item.default : v, item.ty);
+}
+
+/** Every binding in the effective config, defaults included. */
+function bindingEntries(): Entry[] {
+  return allItems()
+    .filter((i) => i.binding_kind)
+    .map((i) => ({ path: i.path, value: bindingText(i), kind: i.binding_kind as Kind }));
+}
+
+const allConflicts = (): Conflict[] => findConflicts(bindingEntries());
+const conflictsFor = (path: string) => allConflicts().filter((c) => c.paths.includes(path));
+
+/** The prefix chord currently in effect, needed to capture `prefix+X`. */
+function prefixChord(): string {
+  const item = findItem("keys.prefix");
+  return item ? bindingText(item) : "";
+}
+
+const RISK_LABEL = { safe: "安定", caution: "要確認", risky: "端末依存" } as const;
+
+function keynoteFor(item: Item): string {
+  if (!item.binding_kind) return "";
+  const kind = item.binding_kind as Kind;
+  const text = bindingText(item);
+  if (!text) return `<span class="kn none">未設定</span>`;
+
+  const parts: string[] = [];
+  for (const e of validate(text, kind, item.accepts_range))
+    parts.push(`<span class="kn err">${esc(e)}</span>`);
+  const r = risk(text, kind);
+  parts.push(`<span class="kn ${r.level}" title="${esc(r.reason)}">${RISK_LABEL[r.level]}</span>`);
+  for (const c of conflictsFor(item.path)) {
+    const others = c.paths.filter((p) => p !== item.path);
+    parts.push(
+      `<span class="kn warn">衝突: ${esc(c.chord)} → ${others.map((p) => esc(p)).join(", ")}</span>`
+    );
+  }
+  return parts.join("");
+}
+
+async function capture(path: string) {
+  const item = findItem(path);
+  if (!item || !item.binding_kind) return;
+  const next = await openCapture({
+    path,
+    title: item.path,
+    kind: item.binding_kind as Kind,
+    acceptsRange: item.accepts_range,
+    current: bindingText(item),
+    prefixChord: item.binding_kind === "prefix" ? "" : prefixChord(),
+    others: bindingEntries().filter((e) => e.path !== path),
+  });
+  if (next === null) return; // cancelled
+  setEdit(path, JSON.stringify(next));
+  renderBody();
+}
+
 // --- row decorations -------------------------------------------------------
 
 function chipFor(item: Item): string {
@@ -76,6 +148,8 @@ function diffFor(item: Item): string {
 function actionsFor(item: Item): string {
   const st = stateOf(item.path);
   const btns: string[] = [];
+  if (item.binding_kind)
+    btns.push(`<button class="ghost rec" data-act="capture" data-p="${esc(item.path)}">キーを録音</button>`);
   if (st !== "inherit")
     btns.push(`<button class="ghost" data-act="reset" data-p="${esc(item.path)}">既定に戻す</button>`);
   if (item.empty_disables && st !== "disabled")
@@ -128,6 +202,7 @@ function renderItem(item: Item): string {
           <span class="slot-actions">${actionsFor(item)}</span>
         </div>
         <div class="slot-diff rowdiff">${diffFor(item)}</div>
+        <div class="slot-keynote keynote">${keynoteFor(item)}</div>
         ${doc ? `<div class="doc">${esc(doc)}</div>` : ""}
       </div>
     </div>`;
@@ -205,9 +280,22 @@ function refreshRow(path: string) {
   row.querySelector(".slot-chip")!.innerHTML = chipFor(item);
   row.querySelector(".slot-diff")!.innerHTML = diffFor(item);
   row.querySelector(".slot-actions")!.innerHTML = actionsFor(item);
+  row.querySelector(".slot-keynote")!.innerHTML = keynoteFor(item);
 }
 
 function renderHeaderCounts() {
+  const clashes = allConflicts();
+  const cEl = el("conflicts");
+  if (clashes.length) {
+    cEl.className = "on";
+    cEl.innerHTML = `キー衝突 <em>${clashes.length}</em>`;
+    cEl.title = clashes.map((c) => `${c.chord}: ${c.paths.join(" / ")}`).join("\n");
+  } else {
+    cEl.className = "";
+    cEl.textContent = "キー衝突 なし";
+    cEl.title = "";
+  }
+
   const n = dirtyPaths().length;
   const btn = el("only-dirty") as HTMLButtonElement;
   btn.disabled = n === 0;
@@ -283,6 +371,10 @@ function bindWidgets() {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
     if (!btn) return;
     const path = btn.dataset.p!;
+    if (btn.dataset.act === "capture") {
+      void capture(path);
+      return;
+    }
     setEdit(path, btn.dataset.act === "disable" ? EMPTY : null);
     // The field's contents change, so this row must be rebuilt.
     const row = body.querySelector<HTMLElement>(`[data-row="${path}"]`);

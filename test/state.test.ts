@@ -17,6 +17,8 @@ const item = (over: Partial<Item> = {}): Item => ({
   optional: false,
   empty_disables: false,
   is_key_binding: true,
+  binding_kind: "action",
+  accepts_range: false,
   ...over,
 });
 
