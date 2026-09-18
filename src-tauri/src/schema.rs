@@ -47,6 +47,9 @@ pub struct Item {
     /// The value is a color, so the form offers a picker. herdr does not
     /// validate colors, so this is the only place a bad one gets caught.
     pub color: bool,
+    /// The value is a popup dimension: `"80%"` as a string or a cell count as
+    /// a bare integer.
+    pub size: bool,
     /// Supplied by the hand-written overlay rather than by
     /// `herdr --default-config`, which documents only some table members.
     pub from_overlay: bool,
@@ -100,6 +103,7 @@ fn overlay_item(section: &str, key: &str) -> Item {
         binding_kind: None,
         accepts_range: false,
         color: true,
+        size: false,
         from_overlay: true,
     }
 }
@@ -169,8 +173,21 @@ pub fn augment(schema: &mut Schema) {
             binding_kind: extra.binding_kind,
             accepts_range: false,
             color: overlay::is_color(extra.section, extra.key),
+            size: overlay::is_size(extra.section, extra.key),
             from_overlay: true,
         });
+    }
+
+    // Replace prose-scraped enum candidates with the members herdr states.
+    for o in overlay::ENUM_OVERRIDES {
+        if let Some(item) = schema
+            .sections
+            .iter_mut()
+            .find(|s| s.name == o.section)
+            .and_then(|s| s.items.iter_mut().find(|i| i.key == o.key))
+        {
+            item.enum_candidates = o.members.iter().map(|m| m.to_string()).collect();
+        }
     }
 
     schema.item_count = schema.sections.iter().map(|s| s.items.len()).sum();
@@ -360,6 +377,7 @@ pub fn parse(text: &str) -> Schema {
                         && (hay.contains("empty") || hay.contains("set to \"\""));
                     let is_key_binding = current == "keys" || current.starts_with("keys.");
                     let color = overlay::is_color(&current, &key);
+                    let size = overlay::is_size(&current, &key);
                     let binding_kind = binding_kind(&current, &key, ty);
                     let accepts_range = binding_kind.is_some()
                         && (value.contains("1..9")
@@ -382,6 +400,7 @@ pub fn parse(text: &str) -> Schema {
                         binding_kind,
                         accepts_range,
                         color,
+                        size,
                         from_overlay: false,
                     });
                 }
@@ -457,8 +476,8 @@ mod tests {
         let documented = parse(FIXTURE);
         assert_eq!(documented.item_count, 140);
         assert_eq!(
-            s.item_count, 192,
-            "140 documented + 46 theme tokens + 6 undocumented"
+            s.item_count, 193,
+            "140 documented + 46 theme tokens + 7 undocumented"
         );
 
         let custom = s
@@ -506,6 +525,25 @@ mod tests {
 
         // `fullscreen` is a legacy alias of `zoom` and must stay out.
         assert!(!keys.items.iter().any(|i| i.key == "fullscreen"));
+
+        // `[[keys.command]]` gains an undocumented label field, and its `type`
+        // enum gains the member `--default-config` omits.
+        let cmd = s
+            .sections
+            .iter()
+            .find(|x| x.name == "keys.command")
+            .unwrap();
+        assert!(cmd.array_of_tables);
+        let desc = cmd.items.iter().find(|i| i.key == "description").unwrap();
+        assert!(desc.from_overlay);
+        let ty = cmd.items.iter().find(|i| i.key == "type").unwrap();
+        assert_eq!(
+            ty.enum_candidates,
+            ["shell", "pane", "popup", "plugin_action"]
+        );
+        for k in ["width", "height"] {
+            assert!(cmd.items.iter().find(|i| i.key == k).unwrap().size, "{k}");
+        }
 
         let ui = s.sections.iter().find(|x| x.name == "ui").unwrap();
         let scope = ui

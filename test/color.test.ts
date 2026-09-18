@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { colorForm, colorToHex } from "../src/color";
+import { sizeToDisplay, sizeToToml } from "../src/types";
 
 test("the documented forms are recognised", () => {
   // From herdr's own comment: hex (#rrggbb), named colors, rgb(r,g,b),
@@ -45,4 +46,31 @@ test("what cannot be previewed returns null rather than a wrong swatch", () => {
   assert.equal(colorToHex(""), null);
   assert.equal(colorToHex("rosewater"), null, "an unknown name has no preview");
   assert.equal(colorToHex("#12345"), null);
+});
+
+// --- popup dimensions ------------------------------------------------------
+
+test("a percentage is quoted and a cell count is not", () => {
+  // herdr: `string sizes must be percentages like 80%; use a number for cells`
+  assert.equal(sizeToToml("80%"), '"80%"');
+  assert.equal(sizeToToml("120"), "120");
+  assert.equal(sizeToToml(" 40 "), "40");
+});
+
+test("percentages outside 1-100 are refused", () => {
+  assert.throws(() => sizeToToml("0%"));
+  assert.throws(() => sizeToToml("200%"));
+  assert.equal(sizeToToml("1%"), '"1%"');
+  assert.equal(sizeToToml("100%"), '"100%"');
+});
+
+test("anything that is neither is refused rather than guessed at", () => {
+  for (const bad of ["big", "80 %", "80px", "", "-10"]) {
+    assert.throws(() => sizeToToml(bad), Error, bad);
+  }
+});
+
+test("both TOML types display as what was typed", () => {
+  assert.equal(sizeToDisplay('"80%"'), "80%");
+  assert.equal(sizeToDisplay("120"), "120");
 });

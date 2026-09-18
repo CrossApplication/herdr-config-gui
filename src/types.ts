@@ -13,6 +13,8 @@ export type Item = {
   is_key_binding: boolean;
   binding_kind: "prefix" | "action" | "navigate" | "indexed" | "command" | null;
   accepts_range: boolean;
+  /** The value is a popup dimension: `"80%"` as a string, cells as an integer. */
+  size: boolean;
   /** The value is a color: the form offers a picker and validates it. */
   color: boolean;
   /** Contributed by the hand-written overlay, not by `herdr --default-config`. */
@@ -122,4 +124,27 @@ export function toToml(display: string, ty: Item["ty"]): string {
     default:
       return display.trim();
   }
+}
+
+
+/**
+ * Popup dimensions are two TOML types in one field: a percentage is a string,
+ * a cell count is a bare integer. herdr rejects `width = "120"` outright, so
+ * the quoting has to follow what was typed.
+ */
+export function sizeToToml(display: string): string {
+  const t = display.trim();
+  if (/^\d+%$/.test(t)) {
+    const n = Number(t.slice(0, -1));
+    if (n < 1 || n > 100) throw new Error("パーセントは 1% から 100% の範囲です");
+    return JSON.stringify(t);
+  }
+  if (/^\d+$/.test(t)) return t; // cells, deliberately unquoted
+  throw new Error('"80%" のようなパーセント、またはセル数の整数を入力してください');
+}
+
+/** The stored TOML for a dimension, as text for the field. */
+export function sizeToDisplay(text: string): string {
+  const t = text.trim();
+  return /^".*"$/.test(t) ? t.slice(1, -1) : t;
 }

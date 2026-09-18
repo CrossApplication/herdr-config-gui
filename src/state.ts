@@ -18,11 +18,18 @@ export type Store = {
   values: Record<string, string>;
   /** Touched settings only. `null` means "inherit the default". */
   edits: Map<string, string | null>;
+  /**
+   * Array-of-tables entries marked for deletion, e.g. `keys.command[1]`.
+   * Only entries that exist on disk need this; a locally added one is undone
+   * by dropping its edits.
+   */
+  removedEntries: Set<string>;
 };
 
 export const newStore = (values: Record<string, string> = {}): Store => ({
   values,
   edits: new Map(),
+  removedEntries: new Set(),
 });
 
 export const saved = (st: Store, path: string): string | null => st.values[path] ?? null;
@@ -63,6 +70,80 @@ export function label(v: string | null, item: Item): string {
   return toDisplay(v, item.ty);
 }
 
-/** What `save_edits` should receive. */
-export const payload = (st: Store) =>
-  dirtyPaths(st).map((path) => ({ path, value: st.edits.get(path)! }));
+// --- array-of-tables entries -----------------------------------------------
+
+export const entryPath = (section: string, index: number) => `${section}[${index}]`;
+
+const entryRe = (section: string) =>
+  new RegExp(`^${section.replace(/[.[\]]/g, "\\$&")}\\[(\\d+)\\]\\.`);
+
+/** Indices of the entries the form should show, lowest first. */
+export function entryIndices(st: Store, section: string): number[] {
+  const re = entryRe(section);
+  const found = new Set<number>();
+  for (const key of [...Object.keys(st.values), ...st.edits.keys()]) {
+    const m = re.exec(key);
+    if (m) found.add(Number(m[1]));
+  }
+  for (const index of [...found]) {
+    if (st.removedEntries.has(entryPath(section, index))) found.delete(index);
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
+export const entryExistsOnDisk = (st: Store, section: string, index: number): boolean =>
+  Object.keys(st.values).some((k) => k.startsWith(`${entryPath(section, index)}.`));
+
+/**
+ * Append an entry, seeded so it is a valid row rather than an empty one.
+ * The index is always one past the highest in use, because herdr's file has
+ * no way to express a gap.
+ */
+export function addEntry(st: Store, section: string, seed: Record<string, string>): number {
+  const used = entryIndices(st, section);
+  const removed = [...st.removedEntries]
+    .map((p) => entryRe(section).exec(`${p}.`)?.[1])
+    .filter((x): x is string => x !== undefined)
+    .map(Number);
+  const index = Math.max(-1, ...used, ...removed) + 1;
+  for (const [key, value] of Object.entries(seed)) {
+    setEdit(st, `${entryPath(section, index)}.${key}`, value);
+  }
+  return index;
+}
+
+export function removeEntry(st: Store, section: string, index: number): void {
+  const prefix = `${entryPath(section, index)}.`;
+  for (const key of [...st.edits.keys()]) {
+    if (key.startsWith(prefix)) st.edits.delete(key);
+  }
+  // An entry that was never saved just disappears; one on disk needs an op.
+  if (entryExistsOnDisk(st, section, index)) {
+    st.removedEntries.add(entryPath(section, index));
+  }
+}
+
+export const hasPendingWork = (st: Store): boolean =>
+  dirtyPaths(st).length > 0 || st.removedEntries.size > 0;
+
+// --- what the backend receives ---------------------------------------------
+
+export type Payload = {
+  path: string;
+  value: string | null;
+  op: "set" | "remove_entry";
+};
+
+export function payload(st: Store): Payload[] {
+  const removedPrefixes = [...st.removedEntries].map((p) => `${p}.`);
+  const sets = dirtyPaths(st)
+    // No point writing values into an entry that is about to be deleted.
+    .filter((path) => !removedPrefixes.some((prefix) => path.startsWith(prefix)))
+    .map((path) => ({ path, value: st.edits.get(path)!, op: "set" as const }));
+  const removals = [...st.removedEntries].map((path) => ({
+    path,
+    value: null,
+    op: "remove_entry" as const,
+  }));
+  return [...sets, ...removals];
+}

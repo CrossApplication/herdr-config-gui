@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   isFatal,
+  sizeToDisplay,
+  sizeToToml,
   toDisplay,
   type Bootstrap,
   type CheckReport,
@@ -25,7 +27,10 @@ import {
 import { installResizer } from "./resizer";
 import {
   EMPTY,
+  addEntry,
   dirtyPaths as dirtyOf,
+  entryIndices,
+  removeEntry,
   effective as effectiveOf,
   fromField,
   isDirty as isDirtyOf,
@@ -56,12 +61,39 @@ const isDirty = (p: string) => isDirtyOf(store, p);
 const dirtyPaths = () => dirtyOf(store);
 const stateOf = (p: string): State => stateOfPath(store, p);
 const payload = () => payloadOf(store);
+/** Edits plus entry deletions: everything a save would send. */
+const pendingCount = () => dirtyOf(store).length + store.removedEntries.size;
 
 function allItems(): Item[] {
   return boot.schema!.sections.flatMap((s) => s.items);
 }
+/**
+ * Items in an array-of-tables section are templates: the schema knows
+ * `keys.command.key`, while the document holds `keys.command[0].key`. Looking
+ * up an indexed path returns the template rewritten to that path, so
+ * everything downstream (state, diffs, capture) works off `item.path` as
+ * usual.
+ */
 function findItem(path: string): Item | undefined {
-  return allItems().find((i) => i.path === path);
+  const direct = allItems().find((i) => i.path === path);
+  if (direct) return direct;
+  const template = allItems().find((i) => i.path === path.replace(/\[\d+\]/g, ""));
+  return template ? { ...template, path } : undefined;
+}
+
+/** Every item the form can actually edit, with entry templates expanded. */
+function allEditableItems(): Item[] {
+  const out: Item[] = [];
+  for (const sec of boot.schema!.sections) {
+    if (!sec.array_of_tables) {
+      out.push(...sec.items);
+      continue;
+    }
+    for (const index of entryIndices(store, sec.name)) {
+      for (const tpl of sec.items) out.push({ ...tpl, path: `${sec.name}[${index}].${tpl.key}` });
+    }
+  }
+  return out;
 }
 
 // --- keybindings -----------------------------------------------------------
@@ -74,14 +106,14 @@ function bindingText(item: Item): string {
 
 /** Every binding in the effective config, defaults included. */
 function bindingEntries(): Entry[] {
-  return allItems()
+  return allEditableItems()
     .filter((i) => i.binding_kind)
     .map((i) => ({ path: i.path, value: bindingText(i), kind: i.binding_kind as Kind }));
 }
 
 /** Same as bindingEntries, plus the range flag the validator needs. */
 function bindingInfos(): BindingInfo[] {
-  return allItems()
+  return allEditableItems()
     .filter((i) => i.binding_kind)
     .map((i) => ({
       path: i.path,
@@ -247,7 +279,8 @@ function widgetFor(item: Item): string {
     </select>`;
   }
 
-  const shown = v === null || v === EMPTY ? "" : toDisplay(v, item.ty);
+  const shown =
+    v === null || v === EMPTY ? "" : item.size ? sizeToDisplay(v) : toDisplay(v, item.ty);
 
   if (item.color) {
     const hex = colorToHex(shown);
@@ -298,6 +331,48 @@ function renderItem(item: Item): string {
     </div>`;
 }
 
+/** A short label for an entry card, taken from whatever identifies it. */
+function entryLabel(section: string, index: number): string {
+  for (const key of ["description", "command", "key"]) {
+    const v = effective(`${section}[${index}].${key}`);
+    if (v !== null && v !== EMPTY) return toDisplay(v, "string");
+  }
+  return "(未入力)";
+}
+
+/**
+ * An array-of-tables section is a list, not a set of settings: its schema
+ * items describe the shape of one entry. Writing them as a plain table makes
+ * herdr discard the whole config, so they are only ever rendered per entry.
+ */
+function renderEntries(sec: Section): string {
+  const indices = entryIndices(store, sec.name);
+  const cards = indices.map((index) => {
+    const fields = sec.items
+      .map((tpl) => findItem(`${sec.name}[${index}].${tpl.key}`))
+      .filter((i): i is Item => i !== undefined)
+      .map(renderItem)
+      .join("");
+    return `<div class="entry">
+        <div class="entry-head">
+          <span class="entry-no">#${index + 1}</span>
+          <span class="entry-label">${esc(entryLabel(sec.name, index))}</span>
+          <span class="cap-spacer"></span>
+          <button class="ghost danger" data-del-entry="${esc(sec.name)}" data-idx="${index}">
+            このエントリを削除
+          </button>
+        </div>
+        ${fields}
+      </div>`;
+  });
+
+  const empty = indices.length
+    ? ""
+    : `<div class="sec-doc">エントリがありません。追加すると <code>[[${esc(sec.name)}]]</code> として書き込まれます。</div>`;
+  return `${empty}${cards.join("")}
+    <button class="ghost add" data-add-entry="${esc(sec.name)}">エントリを追加</button>`;
+}
+
 function matches(i: Item): boolean {
   if (onlyDirty && !isDirty(i.path)) return false;
   if (!filter) return true;
@@ -316,11 +391,18 @@ function renderBody() {
   const parts: string[] = [];
 
   for (const sec of list) {
+    // Filtering or the dirty-only view cannot slice a list of entries apart.
+    if (across && sec.array_of_tables) continue;
     const items = sec.items.filter(matches);
     if (across && !items.length) continue;
-    parts.push(`<h2>${esc(sec.name ? `[${sec.name}]` : "(root)")}</h2>`);
+    const header = sec.array_of_tables ? `[[${sec.name}]]` : sec.name ? `[${sec.name}]` : "(root)";
+    parts.push(`<h2>${esc(header)}</h2>`);
     if (!across && sec.doc.length) parts.push(`<div class="sec-doc">${esc(sec.doc.join(" "))}</div>`);
-    parts.push(...items.map(renderItem));
+    if (sec.array_of_tables) {
+      parts.push(renderEntries(sec));
+    } else {
+      parts.push(...items.map(renderItem));
+    }
     if (!across && sec.hints.length) {
       parts.push(
         `<div class="hints"><h3>設定ではない説明行（${sec.hints.length}）— enum 候補として取り込み済み</h3>${sec.hints
@@ -382,7 +464,7 @@ function renderHeaderCounts() {
     : "キー設定の問題 なし";
   pEl.title = total ? "クリックで内容と直し方を表示" : "問題は見つかっていません";
 
-  const n = dirtyPaths().length;
+  const n = pendingCount();
   const btn = el("only-dirty") as HTMLButtonElement;
   btn.disabled = n === 0;
   btn.classList.toggle("on", onlyDirty);
@@ -401,6 +483,7 @@ function renderBar(extra: string | null = null) {
 
   el("btn-revert").onclick = () => {
     store.edits.clear();
+    store.removedEntries.clear();
     render(null);
   };
   el("btn-preview").onclick = async () => {
@@ -467,7 +550,25 @@ function bindWidgets() {
   });
 
   body.onclick = (ev) => {
-    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-act]");
+    const target = ev.target as HTMLElement;
+
+    const add = target.closest<HTMLButtonElement>("button[data-add-entry]");
+    if (add) {
+      const section = add.dataset.addEntry!;
+      // Seeded with a valid type so the new row is a real entry rather than a
+      // blank one; herdr warns about the missing command until it is filled.
+      addEntry(store, section, { type: '"shell"' });
+      render();
+      return;
+    }
+    const del = target.closest<HTMLButtonElement>("button[data-del-entry]");
+    if (del) {
+      removeEntry(store, del.dataset.delEntry!, Number(del.dataset.idx));
+      render();
+      return;
+    }
+
+    const btn = target.closest<HTMLButtonElement>("button[data-act]");
     if (!btn) return;
     const path = btn.dataset.p!;
     if (btn.dataset.act === "capture") {

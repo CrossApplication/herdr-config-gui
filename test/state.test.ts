@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { clampWidth } from "../src/resizer";
+import {
+  addEntry,
+  entryIndices,
+  hasPendingWork,
+  removeEntry,
+} from "../src/state";
 import { EMPTY, dirtyPaths, effective, fromField, isDirty, label, newStore, payload, setEdit, stateOf } from "../src/state";
 import type { Item } from "../src/types";
 
@@ -20,6 +26,7 @@ const item = (over: Partial<Item> = {}): Item => ({
   binding_kind: "action",
   accepts_range: false,
   color: false,
+  size: false,
   from_overlay: false,
   ...over,
 });
@@ -43,7 +50,7 @@ test("clearing the field returns the setting to its default", () => {
   setEdit(st, "keys.prefix", fromField("", "string"));
   assert.equal(stateOf(st, "keys.prefix"), "inherit");
   assert.equal(isDirty(st, "keys.prefix"), true);
-  assert.deepEqual(payload(st), [{ path: "keys.prefix", value: null }]);
+  assert.deepEqual(payload(st), [{ path: "keys.prefix", value: null, op: "set" }]);
 });
 
 test("typing a value marks the row dirty and quotes it as TOML", () => {
@@ -51,7 +58,7 @@ test("typing a value marks the row dirty and quotes it as TOML", () => {
   setEdit(st, "theme.name", fromField("kanagawa", "string"));
   assert.equal(effective(st, "theme.name"), '"kanagawa"');
   assert.equal(stateOf(st, "theme.name"), "set");
-  assert.deepEqual(payload(st), [{ path: "theme.name", value: '"kanagawa"' }]);
+  assert.deepEqual(payload(st), [{ path: "theme.name", value: '"kanagawa"', op: "set" }]);
 });
 
 test("editing back to the saved value leaves no phantom change", () => {
@@ -77,7 +84,7 @@ test("an explicit empty string is 'disabled', distinct from inherit", () => {
   assert.equal(stateOf(st, "ui.window_title"), "disabled");
   assert.notEqual(stateOf(st, "ui.window_title"), "inherit");
   assert.equal(label(EMPTY, item({ path: "ui.window_title" })), "無効 (空文字)");
-  assert.deepEqual(payload(st), [{ path: "ui.window_title", value: EMPTY }]);
+  assert.deepEqual(payload(st), [{ path: "ui.window_title", value: EMPTY, op: "set" }]);
 });
 
 test("a setting already disabled on disk is not dirty", () => {
@@ -125,4 +132,80 @@ test("sidebar width is clamped to the allowed range", () => {
   assert.equal(clampWidth(20, 150, 560), 150);
   assert.equal(clampWidth(9999, 150, 560), 560);
   assert.equal(clampWidth(249.6, 150, 560), 250, "sub-pixel widths are rounded");
+});
+
+// --- array-of-tables entries -----------------------------------------------
+
+test("entries are discovered from both the file and pending edits", () => {
+  const st = newStore({
+    "keys.command[0].key": '"prefix+alt+g"',
+    "keys.command[0].command": '"lazygit"',
+    "keys.command[1].command": '"btop"',
+  });
+  assert.deepEqual(entryIndices(st, "keys.command"), [0, 1]);
+  setEdit(st, "keys.command[2].type", '"shell"');
+  assert.deepEqual(entryIndices(st, "keys.command"), [0, 1, 2]);
+});
+
+test("a new entry lands one past the highest index in use", () => {
+  const st = newStore({ "keys.command[0].command": '"lazygit"' });
+  assert.equal(addEntry(st, "keys.command", { type: '"shell"' }), 1);
+  assert.equal(effective(st, "keys.command[1].type"), '"shell"');
+  assert.equal(addEntry(st, "keys.command", { type: '"shell"' }), 2);
+});
+
+test("removing a saved entry becomes a remove_entry op", () => {
+  const st = newStore({
+    "keys.command[0].command": '"lazygit"',
+    "keys.command[1].command": '"btop"',
+  });
+  removeEntry(st, "keys.command", 1);
+  assert.deepEqual(entryIndices(st, "keys.command"), [0]);
+  assert.deepEqual(payload(st), [
+    { path: "keys.command[1]", value: null, op: "remove_entry" },
+  ]);
+});
+
+test("removing an unsaved entry just drops its edits", () => {
+  const st = newStore({ "keys.command[0].command": '"lazygit"' });
+  const index = addEntry(st, "keys.command", { type: '"shell"' });
+  setEdit(st, `keys.command[${index}].command`, '"btop"');
+  removeEntry(st, "keys.command", index);
+  assert.deepEqual(payload(st), [], "nothing to send: it never reached disk");
+  assert.deepEqual(entryIndices(st, "keys.command"), [0]);
+});
+
+test("a removed index is not reused while the deletion is pending", () => {
+  // Otherwise the new row and the deletion would fight over one index.
+  const st = newStore({
+    "keys.command[0].command": '"lazygit"',
+    "keys.command[1].command": '"btop"',
+  });
+  removeEntry(st, "keys.command", 1);
+  assert.equal(addEntry(st, "keys.command", { type: '"shell"' }), 2);
+});
+
+test("edits inside a removed entry are not sent", () => {
+  const st = newStore({
+    "keys.command[0].command": '"lazygit"',
+    "keys.command[1].command": '"btop"',
+  });
+  setEdit(st, "keys.command[1].command", '"htop"');
+  removeEntry(st, "keys.command", 1);
+  assert.deepEqual(payload(st), [
+    { path: "keys.command[1]", value: null, op: "remove_entry" },
+  ]);
+});
+
+test("ordinary settings still travel as set ops", () => {
+  const st = newStore({});
+  setEdit(st, "theme.name", '"nord"');
+  assert.deepEqual(payload(st), [{ path: "theme.name", value: '"nord"', op: "set" }]);
+});
+
+test("pending work covers deletions as well as edits", () => {
+  const st = newStore({ "keys.command[0].command": '"lazygit"' });
+  assert.equal(hasPendingWork(st), false);
+  removeEntry(st, "keys.command", 0);
+  assert.equal(hasPendingWork(st), true);
 });

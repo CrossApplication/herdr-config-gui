@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use toml_edit::{DocumentMut, Item, Table, Value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::check::{self, CheckReport};
 use crate::herdr;
@@ -114,12 +114,58 @@ pub struct ConfigState {
     pub parse_error: Option<String>,
 }
 
+/// What an edit does.
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Op {
+    /// Write `value`, or remove the key when it is `None`.
+    #[default]
+    Set,
+    /// Delete a whole array-of-tables entry, e.g. `keys.command[1]`.
+    RemoveEntry,
+}
+
 /// One requested change. `value` is verbatim TOML source text ("true", "42",
 /// "\"ctrl+a\"", "[\"a\", \"b\"]"); `None` means "remove, inherit the default".
-#[derive(Deserialize, Clone, Debug)]
+///
+/// Paths may index an array of tables: `keys.command[0].key`.
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct Edit {
     pub path: String,
     pub value: Option<String>,
+    #[serde(default)]
+    pub op: Op,
+}
+
+/// One step of a dotted path. `[[keys.command]]` entries are addressed by
+/// index, so a segment is either a plain key or an indexed entry.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Seg {
+    Key(String),
+    Entry(String, usize),
+}
+
+pub fn parse_path(path: &str) -> Result<Vec<Seg>, String> {
+    let mut out = Vec::new();
+    for part in path.split('.') {
+        if part.is_empty() {
+            return Err(format!("{path}: empty path segment"));
+        }
+        match part.find('[') {
+            Some(open) => {
+                let name = &part[..open];
+                if name.is_empty() || !part.ends_with(']') {
+                    return Err(format!("{path}: malformed index in {part}"));
+                }
+                let index = part[open + 1..part.len() - 1]
+                    .parse::<usize>()
+                    .map_err(|_| format!("{path}: {part} has a non-numeric index"))?;
+                out.push(Seg::Entry(name.to_string(), index));
+            }
+            None => out.push(Seg::Key(part.to_string())),
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -238,23 +284,59 @@ pub fn load() -> ConfigState {
     }
 }
 
-/// Descend to the table owning `key`, creating missing intermediate tables as
-/// implicit so no empty `[ui]` / `[ui.sidebar]` headers get emitted.
-fn owner_table<'a>(doc: &'a mut DocumentMut, parts: &[&str]) -> Result<&'a mut Table, String> {
+/// Descend to the table that owns the leaf, creating what is missing.
+///
+/// Intermediate tables are created implicit so no empty `[ui]` /
+/// `[ui.sidebar]` headers get emitted; the innermost one is made explicit
+/// because its keys need a header to live under. A new array-of-tables entry
+/// may only be appended, never created at an arbitrary index, so the file
+/// cannot end up with blank entries padding a gap.
+fn owner_table<'a>(doc: &'a mut DocumentMut, segs: &[Seg]) -> Result<&'a mut Table, String> {
     let mut tbl = doc.as_table_mut();
-    for (i, part) in parts.iter().enumerate() {
-        if !tbl.contains_key(part) {
-            let mut new = Table::new();
-            new.set_implicit(true);
-            tbl.insert(part, Item::Table(new));
+    let mut ends_in_table = false;
+
+    for seg in segs {
+        match seg {
+            Seg::Key(name) => {
+                if !tbl.contains_key(name) {
+                    let mut new = Table::new();
+                    new.set_implicit(true);
+                    tbl.insert(name, Item::Table(new));
+                }
+                tbl = tbl
+                    .get_mut(name)
+                    .and_then(|it| it.as_table_mut())
+                    .ok_or_else(|| format!("{name} is not a table"))?;
+                ends_in_table = true;
+            }
+            Seg::Entry(name, index) => {
+                if !tbl.contains_key(name) {
+                    tbl.insert(name, Item::ArrayOfTables(ArrayOfTables::new()));
+                }
+                let aot = tbl
+                    .get_mut(name)
+                    .and_then(|it| it.as_array_of_tables_mut())
+                    .ok_or_else(|| format!("{name} is not an array of tables"))?;
+                if *index > aot.len() {
+                    return Err(format!(
+                        "{name}[{index}] cannot be created: only {} entries exist",
+                        aot.len()
+                    ));
+                }
+                if *index == aot.len() {
+                    aot.push(Table::new());
+                }
+                tbl = aot
+                    .get_mut(*index)
+                    .ok_or_else(|| format!("{name}[{index}] is missing"))?;
+                ends_in_table = false;
+            }
         }
-        tbl = tbl
-            .get_mut(part)
-            .and_then(|it| it.as_table_mut())
-            .ok_or_else(|| format!("{} is not a table", parts[..=i].join(".")))?;
     }
-    // The innermost table must be rendered, otherwise its keys have nowhere to go.
-    tbl.set_implicit(false);
+
+    if ends_in_table {
+        tbl.set_implicit(false);
+    }
     Ok(tbl)
 }
 
@@ -263,6 +345,11 @@ fn prune(tbl: &mut Table) {
         .iter()
         .filter_map(|(k, v)| match v {
             Item::Table(t) if t.is_empty() => Some(k.to_string()),
+            // An array of tables whose entries are all gone, or which only
+            // holds blank entries, leaves a stray `[[...]]` header behind.
+            Item::ArrayOfTables(a) if a.is_empty() || a.iter().all(|t| t.is_empty()) => {
+                Some(k.to_string())
+            }
             _ => None,
         })
         .collect();
@@ -284,9 +371,20 @@ pub fn apply_edits(raw: &str, edits: &[Edit]) -> Result<(String, Vec<Change>), S
     let before: std::collections::BTreeMap<String, String> = leaves(&doc).into_iter().collect();
     let mut changes = Vec::new();
 
-    for edit in edits {
-        let parts: Vec<&str> = edit.path.split('.').collect();
-        let (key, parents) = parts.split_last().ok_or("empty path")?;
+    // Entry deletions run last, highest index first: removing an entry shifts
+    // the ones after it, so any other order would delete the wrong rows.
+    let mut removals: Vec<&Edit> = edits.iter().filter(|e| e.op == Op::RemoveEntry).collect();
+    removals.sort_by_key(|e| std::cmp::Reverse(entry_index(&e.path).unwrap_or(0)));
+
+    for edit in edits.iter().filter(|e| e.op == Op::Set) {
+        let segs = parse_path(&edit.path)?;
+        let (leaf, parents) = segs.split_last().ok_or("empty path")?;
+        let Seg::Key(key) = leaf else {
+            return Err(format!(
+                "{}: a value cannot be written to an entry",
+                edit.path
+            ));
+        };
         let from = before.get(&edit.path).cloned();
 
         match &edit.value {
@@ -346,8 +444,69 @@ pub fn apply_edits(raw: &str, edits: &[Edit]) -> Result<(String, Vec<Change>), S
         }
     }
 
+    for edit in removals {
+        let segs = parse_path(&edit.path)?;
+        let (leaf, parents) = segs.split_last().ok_or("empty path")?;
+        let Seg::Entry(name, index) = leaf else {
+            return Err(format!("{}: remove_entry needs an indexed path", edit.path));
+        };
+        let noop = Change {
+            path: edit.path.clone(),
+            from: None,
+            to: None,
+            action: "noop",
+        };
+        let Some(tbl) = find_table(&mut doc, parents) else {
+            changes.push(noop);
+            continue;
+        };
+        let Some(aot) = tbl.get_mut(name).and_then(|it| it.as_array_of_tables_mut()) else {
+            changes.push(noop);
+            continue;
+        };
+        if *index >= aot.len() {
+            changes.push(noop);
+            continue;
+        }
+        aot.remove(*index);
+        if aot.is_empty() {
+            tbl.remove(name);
+        }
+        changes.push(Change {
+            path: edit.path.clone(),
+            from: Some("(entry)".into()),
+            to: None,
+            action: "remove",
+        });
+    }
+
     prune(doc.as_table_mut());
     Ok((newline.apply(&doc.to_string()), changes))
+}
+
+/// Navigate without creating anything. Removing from a table that does not
+/// exist must not bring it into being: `owner_table` would materialize an
+/// empty `[keys]` header on the way to a `keys.command[9]` that is not there.
+fn find_table<'a>(doc: &'a mut DocumentMut, segs: &[Seg]) -> Option<&'a mut Table> {
+    let mut tbl = doc.as_table_mut();
+    for seg in segs {
+        tbl = match seg {
+            Seg::Key(name) => tbl.get_mut(name)?.as_table_mut()?,
+            Seg::Entry(name, index) => tbl
+                .get_mut(name)?
+                .as_array_of_tables_mut()?
+                .get_mut(*index)?,
+        };
+    }
+    Some(tbl)
+}
+
+/// Index of the last segment, when the path ends in one.
+fn entry_index(path: &str) -> Option<usize> {
+    match parse_path(path).ok()?.pop()? {
+        Seg::Entry(_, i) => Some(i),
+        Seg::Key(_) => None,
+    }
 }
 
 pub fn preview(edits: Vec<Edit>) -> Preview {
@@ -477,6 +636,7 @@ split_vertical = "prefix+|"
         Edit {
             path: path.into(),
             value: value.map(|s| s.to_string()),
+            op: Op::Set,
         }
     }
 
@@ -567,6 +727,246 @@ split_vertical = "prefix+|"
             apply_edits(SAMPLE, &[edit("keys.split_vertical", Some("\"\""))]).unwrap();
         assert_eq!(changes[0].action, "update");
         assert!(after.contains("split_vertical = \"\""));
+    }
+}
+
+#[cfg(test)]
+mod aot_tests {
+    use super::*;
+
+    const TWO: &str = "\
+[[keys.command]]
+key = \"prefix+alt+g\"
+type = \"popup\"
+command = \"lazygit\"   # my git popup
+
+[[keys.command]]
+key = \"prefix+alt+t\"
+type = \"shell\"
+command = \"echo hi\"
+";
+
+    fn set(path: &str, value: &str) -> Edit {
+        Edit {
+            path: path.into(),
+            value: Some(value.to_string()),
+            op: Op::Set,
+        }
+    }
+    fn drop_entry(path: &str) -> Edit {
+        Edit {
+            path: path.into(),
+            value: None,
+            op: Op::RemoveEntry,
+        }
+    }
+
+    #[test]
+    fn paths_may_index_an_entry() {
+        assert_eq!(
+            parse_path("keys.command[0].key").unwrap(),
+            vec![
+                Seg::Key("keys".into()),
+                Seg::Entry("command".into(), 0),
+                Seg::Key("key".into()),
+            ]
+        );
+        assert_eq!(
+            parse_path("theme.name").unwrap(),
+            vec![Seg::Key("theme".into()), Seg::Key("name".into())]
+        );
+        for bad in [
+            "keys.command[x].key",
+            "keys.command[0.key",
+            "keys..name",
+            "keys.[0]",
+        ] {
+            assert!(parse_path(bad).is_err(), "{bad} should not parse");
+        }
+    }
+
+    #[test]
+    fn the_first_entry_is_written_as_an_array_of_tables() {
+        // Writing it as a plain `[keys.command]` table makes herdr discard the
+        // whole config, so the double-bracket form matters.
+        let (after, changes) = apply_edits(
+            "",
+            &[
+                set("keys.command[0].key", "\"prefix+alt+g\""),
+                set("keys.command[0].type", "\"popup\""),
+                set("keys.command[0].command", "\"lazygit\""),
+            ],
+        )
+        .unwrap();
+        assert!(after.contains("[[keys.command]]"), "{after}");
+        assert!(!after.contains("\n[keys.command]"), "{after}");
+        assert_eq!(changes.iter().filter(|c| c.action == "add").count(), 3);
+    }
+
+    #[test]
+    fn a_second_entry_is_appended_without_touching_the_first() {
+        let (after, _) = apply_edits(
+            TWO,
+            &[
+                set("keys.command[2].key", "\"prefix+alt+d\""),
+                set("keys.command[2].command", "\"btop\""),
+            ],
+        )
+        .unwrap();
+        assert_eq!(after.matches("[[keys.command]]").count(), 3);
+        assert!(
+            after.contains("command = \"lazygit\"   # my git popup"),
+            "{after}"
+        );
+        assert!(after.contains("prefix+alt+d"));
+    }
+
+    #[test]
+    fn an_entry_cannot_be_created_past_the_end() {
+        // Otherwise the file would gain blank entries padding the gap.
+        let err = apply_edits(TWO, &[set("keys.command[5].key", "\"prefix+x\"")]).unwrap_err();
+        assert!(err.contains("only 2 entries exist"), "{err}");
+    }
+
+    #[test]
+    fn removing_an_entry_keeps_the_others_verbatim() {
+        let (after, changes) = apply_edits(TWO, &[drop_entry("keys.command[0]")]).unwrap();
+        assert_eq!(after.matches("[[keys.command]]").count(), 1);
+        assert!(!after.contains("lazygit"));
+        assert!(after.contains("key = \"prefix+alt+t\""));
+        assert_eq!(changes[0].action, "remove");
+    }
+
+    #[test]
+    fn removing_the_last_entry_removes_the_header_too() {
+        let (after, _) = apply_edits(
+            TWO,
+            &[drop_entry("keys.command[0]"), drop_entry("keys.command[1]")],
+        )
+        .unwrap();
+        assert!(
+            !after.contains("keys.command"),
+            "stray header left: {after:?}"
+        );
+    }
+
+    #[test]
+    fn several_removals_in_one_batch_delete_the_intended_rows() {
+        let three =
+            format!("{TWO}\n[[keys.command]]\nkey = \"prefix+alt+d\"\ncommand = \"btop\"\n");
+        // Deleting 0 first would shift 2 down to 1; the highest index must go
+        // first for both to be the rows the user picked.
+        let (after, _) = apply_edits(
+            &three,
+            &[drop_entry("keys.command[0]"), drop_entry("keys.command[2]")],
+        )
+        .unwrap();
+        assert_eq!(after.matches("[[keys.command]]").count(), 1);
+        assert!(
+            after.contains("prefix+alt+t"),
+            "the middle entry must survive: {after}"
+        );
+        assert!(!after.contains("lazygit"));
+        assert!(!after.contains("btop"));
+    }
+
+    #[test]
+    fn removing_a_missing_entry_is_a_noop() {
+        let (after, changes) = apply_edits(TWO, &[drop_entry("keys.command[9]")]).unwrap();
+        assert_eq!(after, TWO);
+        assert_eq!(changes[0].action, "noop");
+    }
+
+    #[test]
+    fn popup_sizes_keep_their_toml_type() {
+        // A percentage is a string; a cell count is a bare integer. herdr
+        // rejects `width = "120"` outright.
+        let (after, _) = apply_edits(
+            TWO,
+            &[
+                set("keys.command[0].width", "\"80%\""),
+                set("keys.command[1].width", "120"),
+            ],
+        )
+        .unwrap();
+        assert!(after.contains("width = \"80%\""), "{after}");
+        assert!(after.contains("width = 120"), "{after}");
+    }
+
+    #[test]
+    fn a_value_cannot_be_written_onto_an_entry_itself() {
+        let err = apply_edits(TWO, &[set("keys.command[0]", "\"x\"")]).unwrap_err();
+        assert!(err.contains("cannot be written to an entry"), "{err}");
+    }
+
+    /// The whole point of the indexed paths: what the form builds must be
+    /// something herdr accepts. Skipped when herdr is unavailable.
+    #[test]
+    fn what_the_form_builds_is_accepted_by_herdr() {
+        if check::check_toml("").unavailable.is_some() {
+            eprintln!("herdr not installed; skipping");
+            return;
+        }
+
+        let (one, _) = apply_edits(
+            "",
+            &[
+                set("keys.command[0].key", "\"prefix+alt+g\""),
+                set("keys.command[0].type", "\"popup\""),
+                set("keys.command[0].command", "\"lazygit\""),
+                set("keys.command[0].width", "\"80%\""),
+                set("keys.command[0].height", "\"80%\""),
+                set("keys.command[0].description", "\"Git\""),
+            ],
+        )
+        .unwrap();
+        let r = check::check_toml(&one);
+        assert!(r.ok, "first entry rejected: {}", r.raw);
+
+        let (two, _) = apply_edits(
+            &one,
+            &[
+                set("keys.command[1].key", "\"prefix+alt+t\""),
+                set("keys.command[1].type", "\"shell\""),
+                set("keys.command[1].command", "\"echo hi\""),
+            ],
+        )
+        .unwrap();
+        let r = check::check_toml(&two);
+        assert!(r.ok, "second entry rejected: {}", r.raw);
+
+        let (left, _) = apply_edits(&two, &[drop_entry("keys.command[0]")]).unwrap();
+        let r = check::check_toml(&left);
+        assert!(r.ok, "config after a deletion rejected: {}", r.raw);
+        assert!(left.contains("echo hi"));
+        assert!(!left.contains("lazygit"));
+    }
+
+    /// Why the indexed paths exist at all: the single-table form herdr is
+    /// given by a naive writer is not merely ignored, it discards everything.
+    #[test]
+    fn the_single_table_form_would_discard_the_whole_config() {
+        if check::check_toml("").unavailable.is_some() {
+            return;
+        }
+        let r = check::check_toml("[keys.command]\nkey = \"prefix+alt+g\"\ncommand = \"x\"\n");
+        assert!(r.fatal());
+        assert!(r.discards_config);
+    }
+
+    #[test]
+    fn entries_are_reported_by_index_when_read_back() {
+        let state = apply_edits(TWO, &[]).unwrap().0;
+        let doc: DocumentMut = state.parse().unwrap();
+        let paths: Vec<String> = leaves(&doc).into_iter().map(|(p, _)| p).collect();
+        assert!(
+            paths.contains(&"keys.command[0].key".to_string()),
+            "{paths:?}"
+        );
+        assert!(
+            paths.contains(&"keys.command[1].command".to_string()),
+            "{paths:?}"
+        );
     }
 }
 
@@ -690,6 +1090,7 @@ mod newline_tests {
         Edit {
             path: path.into(),
             value: Some(value.to_string()),
+            op: Op::Set,
         }
     }
 
@@ -744,6 +1145,7 @@ mod newline_tests {
             &[Edit {
                 path: "theme.name".into(),
                 value: None,
+                op: Op::Set,
             }],
         )
         .unwrap();
@@ -785,14 +1187,17 @@ mod save_tests {
                 Edit {
                     path: "theme.name".into(),
                     value: Some("\"kanagawa\"".into()),
+                    op: Op::Set,
                 },
                 Edit {
                     path: "theme.auto_switch".into(),
                     value: None,
+                    op: Op::Set,
                 },
                 Edit {
                     path: "ui.sidebar_width".into(),
                     value: Some("30".into()),
+                    op: Op::Set,
                 },
             ],
             false,
@@ -845,6 +1250,7 @@ mod save_tests {
             vec![Edit {
                 path: "ui.sidebar_width".into(),
                 value: Some("\"wide\"".into()),
+                op: Op::Set,
             }],
             false,
         )
@@ -875,6 +1281,7 @@ mod save_tests {
             vec![Edit {
                 path: "theme.custom.not_a_real_token".into(),
                 value: Some("\"#ff0000\"".into()),
+                op: Op::Set,
             }],
             false,
         )

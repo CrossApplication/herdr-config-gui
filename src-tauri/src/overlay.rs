@@ -116,7 +116,40 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         enum_values: &["current", "all"],
         binding_kind: None,
     },
+    Extra {
+        section: "keys.command",
+        key: "description",
+        ty: "string",
+        doc: "Label for this custom command, shown wherever herdr lists it.",
+        enum_values: &[],
+        binding_kind: None,
+    },
 ];
+
+/// An enum whose members `--default-config` does not state exactly.
+///
+/// The form otherwise scrapes candidates out of prose, which is guesswork;
+/// herdr names them precisely when it rejects a bad value, and the tests below
+/// compare these lists against what it reports.
+pub struct EnumOverride {
+    pub section: &'static str,
+    pub key: &'static str,
+    pub members: &'static [&'static str],
+}
+
+pub const ENUM_OVERRIDES: &[EnumOverride] = &[EnumOverride {
+    section: "keys.command",
+    key: "type",
+    // `--default-config` documents only the first three.
+    members: &["shell", "pane", "popup", "plugin_action"],
+}];
+
+/// Popup dimensions: a percentage as a string, or a cell count as a bare
+/// integer. herdr rejects `width = "120"` outright, so the form has to know
+/// which of the two a value is and quote it accordingly.
+pub fn is_size(section: &str, key: &str) -> bool {
+    section == "keys.command" && (key == "width" || key == "height")
+}
 
 /// Settings whose value is a color, so the form can offer a picker.
 ///
@@ -175,7 +208,7 @@ mod tests {
             // A value of the wrong type proves the key exists and tells us the
             // type herdr wants, which is how these were found in the first
             // place. An unknown key is reported differently.
-            let r = check::check_toml(&format!("[{}]\n{} = 0.5\n", e.section, e.key));
+            let r = check::check_toml(&probe_body(e.section, e.key, "0.5"));
             let unknown = r
                 .diagnostics
                 .iter()
@@ -209,6 +242,50 @@ mod tests {
                 e.key
             );
         }
+    }
+
+    /// `[[keys.command]]` is an array of tables, so a probe has to use the
+    /// double-bracket form or herdr rejects the shape before the value.
+    fn probe_body(section: &str, key: &str, value: &str) -> String {
+        if section == "keys.command" {
+            format!("[[keys.command]]\ncommand = \"x\"\n{key} = {value}\n")
+        } else {
+            format!("[{section}]\n{key} = {value}\n")
+        }
+    }
+
+    #[test]
+    fn enum_overrides_match_what_herdr_reports() {
+        if check::check_toml("").unavailable.is_some() {
+            eprintln!("herdr not installed; skipping");
+            return;
+        }
+        for o in ENUM_OVERRIDES {
+            let r = check::check_toml(&probe_body(o.section, o.key, "\"not-a-member\""));
+            let reported = r
+                .diagnostics
+                .iter()
+                .find(|d| d.kind == check::Kind::Variant)
+                .map(|d| d.allowed.clone())
+                .unwrap_or_else(|| {
+                    panic!("no variant error for [{}] {}: {}", o.section, o.key, r.raw)
+                });
+            assert_eq!(
+                reported,
+                o.members.to_vec(),
+                "[{}] {} members drifted",
+                o.section,
+                o.key
+            );
+        }
+    }
+
+    #[test]
+    fn popup_sizes_are_recognised() {
+        assert!(is_size("keys.command", "width"));
+        assert!(is_size("keys.command", "height"));
+        assert!(!is_size("keys.command", "command"));
+        assert!(!is_size("ui", "sidebar_width"));
     }
 
     #[test]
