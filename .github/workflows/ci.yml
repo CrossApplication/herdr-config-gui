@@ -22,7 +22,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Tauri links against the system webview; only Linux needs it installed.
       - name: Install Linux system dependencies
@@ -38,7 +38,7 @@ jobs:
             build-essential \
             file
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
