@@ -8,7 +8,7 @@
  *                           settings whose docs say an empty string turns the
  *                           feature off; unreachable by clearing the field)
  */
-import { toDisplay, toToml, type Item } from "./types";
+import { sizeToToml, toDisplay, toToml, type Item } from "./types";
 
 export const EMPTY = '""';
 export type State = "inherit" | "set" | "disabled";
@@ -63,6 +63,18 @@ export function fromField(text: string, ty: Item["ty"]): string | null {
   return text.trim() === "" ? null : toToml(text, ty);
 }
 
+/**
+ * Field text -> stored value for a specific setting.
+ *
+ * Popup dimensions carry two TOML types in one field, so the quoting depends
+ * on the setting rather than on its declared type: `80%` is a string and a
+ * cell count is a bare integer, and herdr rejects `width = "120"` outright.
+ */
+export function fromFieldFor(item: Pick<Item, "ty" | "size">, text: string): string | null {
+  if (!item.size) return fromField(text, item.ty);
+  return text.trim() === "" ? null : sizeToToml(text);
+}
+
 /** Human-readable rendering of a stored value, for chips and diffs. */
 export function label(v: string | null, item: Item): string {
   if (v === null) return `既定 (${toDisplay(item.default, item.ty) || '""'})`;
@@ -72,7 +84,7 @@ export function label(v: string | null, item: Item): string {
 
 // --- array-of-tables entries -----------------------------------------------
 
-export const entryPath = (section: string, index: number) => `${section}[${index}]`;
+const entryPath = (section: string, index: number) => `${section}[${index}]`;
 
 const entryRe = (section: string) =>
   new RegExp(`^${section.replace(/[.[\]]/g, "\\$&")}\\[(\\d+)\\]\\.`);
@@ -91,7 +103,7 @@ export function entryIndices(st: Store, section: string): number[] {
   return [...found].sort((a, b) => a - b);
 }
 
-export const entryExistsOnDisk = (st: Store, section: string, index: number): boolean =>
+const entryExistsOnDisk = (st: Store, section: string, index: number): boolean =>
   Object.keys(st.values).some((k) => k.startsWith(`${entryPath(section, index)}.`));
 
 /**

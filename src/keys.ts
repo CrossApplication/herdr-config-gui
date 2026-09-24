@@ -58,7 +58,8 @@ const KEY_ALIASES: Record<string, string> = {
   spacebar: "space",
 };
 
-export const RANGE = "1..9";
+/** The indexed form, e.g. `switch_tab = "prefix+1..9"`. */
+const RANGE = "1..9";
 
 export type Parsed = {
   prefix: boolean;

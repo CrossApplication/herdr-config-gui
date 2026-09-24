@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   isFatal,
   sizeToDisplay,
-  sizeToToml,
   toDisplay,
   type Bootstrap,
   type CheckReport,
@@ -38,7 +37,7 @@ import {
   entryIndices,
   removeEntry,
   effective as effectiveOf,
-  fromField,
+  fromFieldFor,
   isDirty as isDirtyOf,
   label,
   newStore,
@@ -574,9 +573,14 @@ function bindWidgets() {
     const commit = () => {
       try {
         // An empty field means "inherit the default": the key leaves the file.
-        const next = fromField(input.value, item.ty);
+        setEdit(path, fromFieldFor(item, input.value));
         input.classList.remove("invalid");
-        setEdit(path, next);
+        if (item.color) {
+          // Keep the swatch on the colour the text now describes.
+          const sw = body.querySelector<HTMLInputElement>(`input[data-sw="${path}"]`);
+          const hex = colorToHex(input.value);
+          if (sw && hex) sw.value = hex;
+        }
       } catch {
         input.classList.add("invalid");
       }
@@ -597,7 +601,7 @@ function bindWidgets() {
   body.querySelectorAll<HTMLSelectElement>("select[data-w]").forEach((sel) => {
     const path = sel.dataset.w!;
     const item = findItem(path)!;
-    sel.onchange = () => setEdit(path, fromField(sel.value, item.ty));
+    sel.onchange = () => setEdit(path, fromFieldFor(item, sel.value));
   });
 
   /** Which rows setting, row and token an event happened in. */

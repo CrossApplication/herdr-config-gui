@@ -7,6 +7,7 @@ import {
   hasPendingWork,
   removeEntry,
 } from "../src/state";
+import { fromFieldFor } from "../src/state";
 import { EMPTY, dirtyPaths, effective, fromField, isDirty, label, newStore, payload, setEdit, stateOf } from "../src/state";
 import type { Item } from "../src/types";
 
@@ -209,4 +210,28 @@ test("pending work covers deletions as well as edits", () => {
   assert.equal(hasPendingWork(st), false);
   removeEntry(st, "keys.command", 0);
   assert.equal(hasPendingWork(st), true);
+});
+
+// --- per-setting field conversion ------------------------------------------
+
+const sizeItem = () => item({ path: "keys.command[0].width", key: "width", size: true });
+
+test("a popup dimension is quoted only when it is a percentage", () => {
+  // herdr rejects `width = "120"`: a cell count must be a bare integer.
+  assert.equal(fromFieldFor(sizeItem(), "80%"), '"80%"');
+  assert.equal(fromFieldFor(sizeItem(), "120"), "120");
+});
+
+test("an ordinary string setting is always quoted", () => {
+  assert.equal(fromFieldFor(item({ ty: "string" }), "120"), '"120"');
+});
+
+test("an empty field still means inherit, whatever the setting", () => {
+  assert.equal(fromFieldFor(sizeItem(), ""), null);
+  assert.equal(fromFieldFor(item({ ty: "string" }), "  "), null);
+});
+
+test("a dimension that is neither form is refused rather than quoted", () => {
+  assert.throws(() => fromFieldFor(sizeItem(), "wide"));
+  assert.throws(() => fromFieldFor(sizeItem(), "200%"));
 });
