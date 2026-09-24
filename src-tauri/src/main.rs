@@ -10,6 +10,11 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 struct Bootstrap {
+    /// Token family -> the tokens a sidebar row of that family may contain.
+    token_sets: std::collections::BTreeMap<&'static str, Vec<&'static str>>,
+    /// Canonical agent ids per table. herdr spells two of them differently in
+    /// each, so the lists are kept apart rather than shared.
+    agent_ids: std::collections::BTreeMap<&'static str, Vec<&'static str>>,
     herdr_found: bool,
     herdr_path: Option<String>,
     herdr_version: Option<String>,
@@ -64,6 +69,18 @@ fn bootstrap() -> Bootstrap {
         .collect();
 
     Bootstrap {
+        token_sets: [
+            ("agent", overlay::AGENT_ROW_TOKENS.to_vec()),
+            ("space", overlay::SPACE_ROW_TOKENS.to_vec()),
+        ]
+        .into_iter()
+        .collect(),
+        agent_ids: [
+            ("rows_by_agent", overlay::ROWS_BY_AGENT_IDS.to_vec()),
+            ("sound", overlay::SOUND_AGENT_IDS.to_vec()),
+        ]
+        .into_iter()
+        .collect(),
         herdr_found: exe.is_some(),
         herdr_path: exe.map(|p| p.display().to_string()),
         herdr_version: herdr::version(),

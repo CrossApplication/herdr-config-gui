@@ -15,6 +15,8 @@ export type Item = {
   accepts_range: boolean;
   /** The value is a popup dimension: `"80%"` as a string, cells as an integer. */
   size: boolean;
+  /** The value is sidebar rows; names the token family (`agent` / `space`). */
+  token_set: string | null;
   /** The value is a color: the form offers a picker and validates it. */
   color: boolean;
   /** Contributed by the hand-written overlay, not by `herdr --default-config`. */
@@ -39,6 +41,14 @@ export type ConfigState = {
   parse_error: string | null;
 };
 export type Bootstrap = {
+  /** Token family -> the tokens a sidebar row of that family may contain. */
+  token_sets: Record<string, string[]>;
+  /**
+   * Canonical agent ids per table. herdr spells two of them differently in
+   * each: `opencode`/`copilot` under rows_by_agent, `open_code`/
+   * `github_copilot` under sound.
+   */
+  agent_ids: Record<string, string[]>;
   herdr_found: boolean;
   herdr_path: string | null;
   herdr_version: string | null;

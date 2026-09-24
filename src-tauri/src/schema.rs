@@ -50,6 +50,9 @@ pub struct Item {
     /// The value is a popup dimension: `"80%"` as a string or a cell count as
     /// a bare integer.
     pub size: bool,
+    /// The value is sidebar rows, and this names the token family they take
+    /// (`agent` or `space`). The two are not interchangeable.
+    pub token_set: Option<&'static str>,
     /// Supplied by the hand-written overlay rather than by
     /// `herdr --default-config`, which documents only some table members.
     pub from_overlay: bool,
@@ -104,6 +107,7 @@ fn overlay_item(section: &str, key: &str) -> Item {
         accepts_range: false,
         color: true,
         size: false,
+        token_set: None,
         from_overlay: true,
     }
 }
@@ -174,6 +178,7 @@ pub fn augment(schema: &mut Schema) {
             accepts_range: false,
             color: overlay::is_color(extra.section, extra.key),
             size: overlay::is_size(extra.section, extra.key),
+            token_set: overlay::token_set(extra.section, extra.key),
             from_overlay: true,
         });
     }
@@ -378,6 +383,7 @@ pub fn parse(text: &str) -> Schema {
                     let is_key_binding = current == "keys" || current.starts_with("keys.");
                     let color = overlay::is_color(&current, &key);
                     let size = overlay::is_size(&current, &key);
+                    let token_set = overlay::token_set(&current, &key);
                     let binding_kind = binding_kind(&current, &key, ty);
                     let accepts_range = binding_kind.is_some()
                         && (value.contains("1..9")
@@ -401,6 +407,7 @@ pub fn parse(text: &str) -> Schema {
                         accepts_range,
                         color,
                         size,
+                        token_set,
                         from_overlay: false,
                     });
                 }
@@ -571,6 +578,27 @@ mod tests {
         let before = once.item_count;
         augment(&mut once);
         assert_eq!(once.item_count, before, "augment must be idempotent");
+    }
+
+    #[test]
+    fn row_settings_carry_their_token_family() {
+        let s = build(FIXTURE);
+        let get = |section: &str, key: &str| {
+            s.sections
+                .iter()
+                .find(|x| x.name == section)
+                .and_then(|x| x.items.iter().find(|i| i.key == key))
+                .unwrap_or_else(|| panic!("missing [{section}] {key}"))
+        };
+        assert_eq!(get("ui.sidebar.agents", "rows").token_set, Some("agent"));
+        assert_eq!(get("ui.sidebar.spaces", "rows").token_set, Some("space"));
+        assert_eq!(
+            get("ui.sidebar.agents.rows_by_agent", "claude").token_set,
+            Some("agent")
+        );
+        // Other arrays are a different shape and stay raw for now.
+        assert_eq!(get("ui", "tab_bar_right").token_set, None);
+        assert_eq!(get("experimental", "cjk_ime_agents").token_set, None);
     }
 
     #[test]

@@ -144,6 +144,79 @@ pub const ENUM_OVERRIDES: &[EnumOverride] = &[EnumOverride {
     members: &["shell", "pane", "popup", "plugin_action"],
 }];
 
+/// Tokens a sidebar row may contain, per row family. `--default-config`
+/// lists these in prose; each one is probed against herdr in the tests below,
+/// as is a name that is not a token, so the list cannot drift silently.
+///
+/// The two families are not interchangeable: `agent` is rejected in a spaces
+/// row, `branch` in an agents row. Anything starting with `$` is a custom
+/// value reported through pane or workspace metadata and is always allowed.
+pub const AGENT_ROW_TOKENS: &[&str] = &[
+    "state_icon",
+    "state_text",
+    "machine",
+    "workspace",
+    "tab",
+    "pane",
+    "agent",
+    "terminal_title",
+    "terminal_title_stripped",
+];
+
+pub const SPACE_ROW_TOKENS: &[&str] = &[
+    "state_icon",
+    "state_text",
+    "workspace",
+    "branch",
+    "git_status",
+];
+
+/// Which token family a setting's rows belong to, if it holds rows at all.
+pub fn token_set(section: &str, key: &str) -> Option<&'static str> {
+    match (section, key) {
+        ("ui.sidebar.agents", "rows") => Some("agent"),
+        ("ui.sidebar.spaces", "rows") => Some("space"),
+        // Every key under rows_by_agent is one agent's replacement rows.
+        ("ui.sidebar.agents.rows_by_agent", _) => Some("agent"),
+        _ => None,
+    }
+}
+
+/// Canonical agent ids accepted as keys of `[ui.sidebar.agents.rows_by_agent]`.
+///
+/// herdr calls an unknown one an "unknown canonical agent id", so this is a
+/// closed set rather than the free-form table it looks like.
+pub const ROWS_BY_AGENT_IDS: &[&str] = &[
+    "amp", "agy", "claude", "cline", "codex", "copilot", "cursor", "devin", "droid", "gemini",
+    "grok", "hermes", "kilo", "kimi", "kiro", "maki", "opencode", "pi", "qwen",
+];
+
+/// The same agents under `[ui.sound.agents]`, which spells two of them
+/// differently: `open_code` and `github_copilot` rather than `opencode` and
+/// `copilot`. Using the wrong spelling is rejected, so the two lists are kept
+/// apart rather than shared.
+pub const SOUND_AGENT_IDS: &[&str] = &[
+    "amp",
+    "agy",
+    "claude",
+    "cline",
+    "codex",
+    "cursor",
+    "devin",
+    "droid",
+    "gemini",
+    "github_copilot",
+    "grok",
+    "hermes",
+    "kilo",
+    "kimi",
+    "kiro",
+    "maki",
+    "open_code",
+    "pi",
+    "qwen",
+];
+
 /// Popup dimensions: a percentage as a string, or a cell count as a bare
 /// integer. herdr rejects `width = "120"` outright, so the form has to know
 /// which of the two a value is and quote it accordingly.
@@ -278,6 +351,77 @@ mod tests {
                 o.key
             );
         }
+    }
+
+    #[test]
+    fn every_row_token_is_accepted_where_it_belongs() {
+        if check::check_toml("").unavailable.is_some() {
+            eprintln!("herdr not installed; skipping");
+            return;
+        }
+        let rows = |section: &str, token: &str| {
+            check::check_toml(&format!("[{section}]\nrows = [[\"{token}\"]]\n"))
+        };
+        for t in AGENT_ROW_TOKENS {
+            assert!(rows("ui.sidebar.agents", t).ok, "agents rejects {t}");
+        }
+        for t in SPACE_ROW_TOKENS {
+            assert!(rows("ui.sidebar.spaces", t).ok, "spaces rejects {t}");
+        }
+        // The families really are distinct.
+        assert!(!rows("ui.sidebar.spaces", "agent").ok);
+        assert!(!rows("ui.sidebar.agents", "branch").ok);
+        // And the probe discriminates.
+        assert!(!rows("ui.sidebar.agents", "definitely_not_a_token").ok);
+        // Custom values need the sigil, and then anything goes.
+        assert!(rows("ui.sidebar.agents", "$jj_status").ok);
+    }
+
+    #[test]
+    fn row_token_sets_are_assigned_to_the_right_settings() {
+        assert_eq!(token_set("ui.sidebar.agents", "rows"), Some("agent"));
+        assert_eq!(token_set("ui.sidebar.spaces", "rows"), Some("space"));
+        assert_eq!(
+            token_set("ui.sidebar.agents.rows_by_agent", "claude"),
+            Some("agent")
+        );
+        assert_eq!(token_set("ui", "tab_bar_right"), None);
+        assert_eq!(token_set("experimental", "cjk_ime_agents"), None);
+    }
+
+    #[test]
+    fn agent_ids_are_accepted_and_the_two_spellings_stay_apart() {
+        if check::check_toml("").unavailable.is_some() {
+            return;
+        }
+        for id in ROWS_BY_AGENT_IDS {
+            let r = check::check_toml(&format!(
+                "[ui.sidebar.agents.rows_by_agent]\n{id} = [[\"agent\"]]\n"
+            ));
+            assert!(
+                r.ok,
+                "rows_by_agent rejects {id}: {}",
+                r.raw.replace('\n', " ")
+            );
+        }
+        for id in SOUND_AGENT_IDS {
+            let r = check::check_toml(&format!("[ui.sound.agents]\n{id} = \"off\"\n"));
+            assert!(
+                r.ok,
+                "sound.agents rejects {id}: {}",
+                r.raw.replace('\n', " ")
+            );
+        }
+        // herdr spells two of them differently in each table; swapping fails.
+        for (id, section) in [
+            ("open_code", "ui.sidebar.agents.rows_by_agent"),
+            ("github_copilot", "ui.sidebar.agents.rows_by_agent"),
+        ] {
+            let r = check::check_toml(&format!("[{section}]\n{id} = [[\"agent\"]]\n"));
+            assert!(!r.ok, "{id} should not be valid in {section}");
+        }
+        assert!(!check::check_toml("[ui.sound.agents]\nopencode = \"off\"\n").ok);
+        assert!(!check::check_toml("[ui.sound.agents]\ncopilot = \"off\"\n").ok);
     }
 
     #[test]

@@ -410,3 +410,39 @@ button.ghost.add:hover { border-color: var(--accent); border-style: solid; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--row); border-radius: 4px; padding: 0 5px;
 }
+
+/* ---------- sidebar rows editor ---------- */
+.rows-editor { margin-top: 10px; }
+.rowcard {
+  border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px;
+  background: rgba(30, 30, 46, 0.5);
+}
+.rowcard-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+}
+.rowcard-no { flex: none; font-size: 11px; font-weight: 700; color: var(--accent); }
+.rowcard-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+  color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tok {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 10px; border-bottom: 1px solid rgba(49, 50, 68, 0.5);
+}
+.tok:last-of-type { border-bottom: 0; }
+select.tok-name {
+  background: var(--row); color: var(--text); border: 1px solid var(--line);
+  border-radius: 5px; padding: 3px 7px; font: inherit; font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 190px;
+}
+.tok-custom { min-width: 150px; flex: 0 1 190px; font-size: 12px; padding: 3px 7px; }
+.tok-style {
+  display: flex; align-items: center; gap: 4px; flex: none;
+  font-size: 11px; color: var(--dim); cursor: pointer;
+}
+.tok-style input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+.tok-fg { width: 26px; height: 20px; }
+.tok-fg:disabled { opacity: 0.3; }
+button.ghost.tiny { padding: 1px 7px; font-size: 11px; line-height: 1.6; }
+button.ghost.add.tiny { margin: 6px 10px 8px; width: calc(100% - 20px); padding: 4px; }

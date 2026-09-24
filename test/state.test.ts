@@ -27,6 +27,7 @@ const item = (over: Partial<Item> = {}): Item => ({
   accepts_range: false,
   color: false,
   size: false,
+  token_set: null,
   from_overlay: false,
   ...over,
 });

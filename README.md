@@ -246,6 +246,28 @@ popup の `width` / `height` は 1 つのフィールドに 2 つの TOML 型が
 パーセントは文字列 (`"80%"`, 1〜100%)、セル数はクォートなしの整数。
 herdr は `width = "120"` を拒否するため、入力に応じてクォートを変える。
 
+### サイドバーの行は構造として編集する
+
+`ui.sidebar.agents.rows` などは「行 × トークン」の二次元配列で、トークンは組み込み名、
+`$name` 形式のメタデータ値、または `{ token = "workspace", fg = "#89b4fa", bold = true }`
+というインラインスタイルのいずれか。生の TOML で手打ちするには構造が深すぎるため、
+行とトークンを追加・削除・並べ替えできるエディタを用意している。
+
+トークンの集合は行の種類ごとに異なり、互換性はない。`agent` は spaces の行では拒否され、
+`branch` は agents の行では拒否される。
+
+| 種類 | トークン |
+| --- | --- |
+| agents (9) | `state_icon` `state_text` `machine` `workspace` `tab` `pane` `agent` `terminal_title` `terminal_title_stripped` |
+| spaces (5) | `state_icon` `state_text` `workspace` `branch` `git_status` |
+
+スタイルが受け付けるのは `token` `fg` `bold` `dim` のみ。`bg` や `italic` は拒否される。
+`fg` は **`#rgb` / `#rrggbb` だけ**で、名前付き色も `rgb()` も通らない（`[theme.custom]`
+とは規則が違う）。
+
+パースは意図的に狭く作ってある。エディタが表現できない書き方だった場合は構造を推測せず、
+生の TOML 入力にフォールバックする。半分だけ理解した値を書き換えるより安全なため。
+
 ### 行末を保持する
 
 `toml_edit` は文書を描画するとき改行をすべて LF に正規化する。CRLF のファイルを
@@ -313,6 +335,8 @@ herdr --default-config > src-tauri/fixtures/default-config.toml
 | `src/main.ts` | フォーム描画と保存フロー |
 | `src/resizer.ts` | サイドバーのリサイズ |
 | `src/color.ts` | 色値の判定とスウォッチ変換（DOM 非依存・テスト対象） |
+| `src/rows.ts` | サイドバー行のパース・生成・検証（DOM 非依存・テスト対象） |
+| `src/rowsui.ts` | 行エディタの描画と編集操作 |
 | `src-tauri/fixtures/default-config.toml` | `herdr --default-config` のスナップショット（CI 用） |
 
 ## キーバインド
@@ -346,11 +370,16 @@ navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢�
 ## 既知の未実装
 
 - `[[keys.command]]` エントリの並べ替え（追加・削除・編集は可能）
-- `[ui.sidebar.agents.rows_by_agent]` への新規キー追加。任意のキーを受け付ける
-  テーブルはここだけで（`[theme.custom]` は 19 個の固定トークン、
-  `[ui.sound.agents]` はエージェント名の固定集合）、自由入力の UI が必要
-- array 型 5 項目は構造エディタではなく生 TOML 入力。特に
-  `ui.sidebar.agents.rows` は「行 × トークン」の二次元配列で手打ちは辛い
+- `[ui.sidebar.agents.rows_by_agent]` と `[ui.sound.agents]` への新規キー追加。
+  どちらも自由なキーではなく **19 個の正規エージェント ID の集合**で、herdr は
+  未知の名前を拒否する。ID の一覧は取得済み（`overlay::ROWS_BY_AGENT_IDS` /
+  `SOUND_AGENT_IDS`）で UI にも渡しているが、追加する UI はまだない。
+  なお herdr は同じエージェントを表に応じて別綴りで呼ぶ
+  （rows_by_agent は `opencode` / `copilot`、sound は `open_code` / `github_copilot`）
+- `ui.tab_bar_right` は生 TOML 入力のまま。形は判明している
+  （`type` は `zoom` `hostname` `datetime` `text` `command`、`text` は `text` フィールド、
+  `command` は `command` `interval_seconds` `timeout_seconds`）
+- `experimental.cjk_ime_agents` は生 TOML 入力。herdr 側に検証がなく任意の文字列が通る
 - Linux / Windows は CI でビルドとテストが通ることまでしか確認していない。実機での
   ウィンドウ描画、キー録音（WebView2 の `KeyboardEvent`、日本語配列の記号キー）、
   バイナリ探索のフォールバック、インストーラは未検証。

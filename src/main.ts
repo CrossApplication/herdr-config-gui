@@ -13,6 +13,12 @@ import {
   type Section,
 } from "./types";
 import { FORM_LABEL, colorForm, colorToHex } from "./color";
+import { parseRows, rowsToToml, validateRows, type Rows } from "./rows";
+import {
+  applyRowsAction,
+  applyTokenChange,
+  renderRowsEditor,
+} from "./rowsui";
 import { openCapture } from "./capture";
 import { openProblems, problemSummary, type ProblemsHost } from "./problems";
 import {
@@ -54,6 +60,8 @@ let filter = "";
 let onlyDirty = false;
 let active = 0;
 let resizer: { refit: () => void } | null = null;
+/** Rows settings the user has switched to raw TOML editing. */
+const rawMode = new Set<string>();
 
 const saved = (p: string) => savedOf(store, p);
 const effective = (p: string) => effectiveOf(store, p);
@@ -94,6 +102,28 @@ function allEditableItems(): Item[] {
     }
   }
   return out;
+}
+
+// --- sidebar rows ----------------------------------------------------------
+
+/** Structured rows for a setting, or null when the text is not editable. */
+function rowsOf(item: Item): Rows | null {
+  const v = effective(item.path);
+  const text = v === null ? item.default : v;
+  return text ? parseRows(text) : [];
+}
+
+const allowedTokens = (item: Item): string[] =>
+  (item.token_set && boot.token_sets[item.token_set]) || [];
+
+/** True when the structured editor is what this setting should show. */
+function usesRowsEditor(item: Item): boolean {
+  return !!item.token_set && !rawMode.has(item.path) && rowsOf(item) !== null;
+}
+
+function setRows(path: string, rows: Rows, rerender: boolean) {
+  setEdit(path, rowsToToml(rows));
+  if (rerender) renderBody();
 }
 
 // --- keybindings -----------------------------------------------------------
@@ -149,6 +179,15 @@ function colorNote(item: Item): string {
 }
 
 function keynoteFor(item: Item): string {
+  if (item.token_set) {
+    const rows = rowsOf(item);
+    if (!rows)
+      return `<span class="kn err">この値は構造エディタで表せません。生の TOML で編集してください</span>`;
+    const errors = validateRows(rows, allowedTokens(item));
+    if (errors.length) return errors.map((e) => `<span class="kn err">${esc(e)}</span>`).join("");
+    const count = rows.reduce((n, r) => n + r.length, 0);
+    return `<span class="kn safe">${rows.length} 行 / ${count} トークン</span>`;
+  }
   if (item.color) return colorNote(item);
   if (!item.binding_kind) return "";
   const kind = item.binding_kind as Kind;
@@ -255,6 +294,13 @@ function diffFor(item: Item): string {
 function actionsFor(item: Item): string {
   const st = stateOf(item.path);
   const btns: string[] = [];
+  if (item.token_set && !usesRowsEditor(item)) {
+    const parses = rowsOf(item) !== null;
+    btns.push(
+      `<button class="ghost" data-rawmode="${esc(item.path)}" ${parses ? "" : "disabled"}
+        title="${parses ? "構造エディタに戻ります" : "この値は構造エディタで表せません"}">構造エディタ</button>`
+    );
+  }
   if (item.binding_kind)
     btns.push(`<button class="ghost rec" data-act="capture" data-p="${esc(item.path)}">キーを録音</button>`);
   if (st !== "inherit")
@@ -277,6 +323,10 @@ function widgetFor(item: Item): string {
       <option value="true" ${cur === "true" ? "selected" : ""}>true</option>
       <option value="false" ${cur === "false" ? "selected" : ""}>false</option>
     </select>`;
+  }
+
+  if (usesRowsEditor(item)) {
+    return `<button class="ghost" data-rawmode="${esc(item.path)}">生の TOML で編集</button>`;
   }
 
   const shown =
@@ -326,6 +376,7 @@ function renderItem(item: Item): string {
         </div>
         <div class="slot-diff rowdiff">${diffFor(item)}</div>
         <div class="slot-keynote keynote">${keynoteFor(item)}</div>
+        ${usesRowsEditor(item) ? renderRowsEditor(rowsOf(item)!, allowedTokens(item)) : ""}
         ${doc ? `<div class="doc">${esc(doc)}</div>` : ""}
       </div>
     </div>`;
@@ -549,8 +600,70 @@ function bindWidgets() {
     sel.onchange = () => setEdit(path, fromField(sel.value, item.ty));
   });
 
+  /** Which rows setting, row and token an event happened in. */
+  const rowsTarget = (el: HTMLElement) => {
+    const host = el.closest<HTMLElement>("[data-row]");
+    if (!host) return null;
+    const item = findItem(host.dataset.row!);
+    if (!item?.token_set) return null;
+    const rows = rowsOf(item);
+    if (!rows) return null;
+    const card = el.closest<HTMLElement>(".rowcard");
+    const tok = el.closest<HTMLElement>(".tok");
+    return {
+      path: item.path,
+      rows,
+      r: card ? Number(card.dataset.r) : -1,
+      i: tok ? Number(tok.dataset.i) : -1,
+      newToken: allowedTokens(item)[0] ?? "",
+    };
+  };
+
+  const onRowsControl = (ev: Event) => {
+    const el = ev.target as HTMLElement;
+    const field = el.dataset.rowsSet;
+    if (!field) return;
+    const ctx = rowsTarget(el);
+    if (!ctx || ctx.r < 0 || ctx.i < 0) return;
+    const input = el as HTMLInputElement | HTMLSelectElement;
+    const value = input instanceof HTMLInputElement && input.type === "checkbox" ? input.checked : input.value;
+    // Re-rendering while typing a custom name would steal focus.
+    setRows(ctx.path, applyTokenChange(ctx.rows, ctx.r, ctx.i, field, value), field !== "custom");
+    if (field === "custom") refreshRow(ctx.path);
+  };
+  body.onchange = onRowsControl;
+  body.oninput = (ev) => {
+    const el = ev.target as HTMLElement;
+    if (el.dataset.rowsSet === "custom") onRowsControl(ev);
+  };
+
   body.onclick = (ev) => {
     const target = ev.target as HTMLElement;
+
+    const mode = target.closest<HTMLButtonElement>("button[data-rawmode]");
+    if (mode && !mode.disabled) {
+      const path = mode.dataset.rawmode!;
+      if (rawMode.has(path)) rawMode.delete(path);
+      else rawMode.add(path);
+      renderBody();
+      return;
+    }
+
+    const rowsBtn = target.closest<HTMLButtonElement>("button[data-rows-act]");
+    if (rowsBtn) {
+      const ctx = rowsTarget(rowsBtn);
+      if (!ctx) return;
+      const next = applyRowsAction(
+        ctx.rows,
+        rowsBtn.dataset.rowsAct!,
+        ctx.r,
+        ctx.i,
+        Number(rowsBtn.dataset.d ?? 0),
+        ctx.newToken
+      );
+      if (next) setRows(ctx.path, next, true);
+      return;
+    }
 
     const add = target.closest<HTMLButtonElement>("button[data-add-entry]");
     if (add) {
