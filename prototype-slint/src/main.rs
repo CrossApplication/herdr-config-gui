@@ -18,11 +18,15 @@ mod overlay;
 #[path = "../../src-tauri/src/schema.rs"]
 mod schema;
 
+/// The rows editor's own logic, which has no counterpart in the Tauri build:
+/// there it lives in TypeScript as `src/rows.ts`.
+mod rows;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use slint::{ModelRc, VecModel};
+use slint::{ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
 
@@ -49,6 +53,32 @@ impl State {
             Some(v) => v.as_deref() != self.saved.get(path).map(|s| s.as_str()),
             None => false,
         }
+    }
+
+    /// Record an edit, dropping it when it matches what is on disk.
+    fn set(&mut self, path: &str, value: Option<String>) {
+        if value == self.saved.get(path).cloned() {
+            self.edits.remove(path);
+        } else {
+            self.edits.insert(path.to_string(), value);
+        }
+    }
+
+    fn item(&self, path: &str) -> Option<&schema::Item> {
+        self.schema
+            .sections
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .find(|i| i.path == path)
+    }
+
+    /// Structured rows for a setting, falling back to herdr's default.
+    fn rows_of(&self, path: &str) -> rows::Rows {
+        let text = self
+            .effective(path)
+            .or_else(|| self.item(path).map(|i| i.default.clone()))
+            .unwrap_or_default();
+        rows::parse(&text).unwrap_or_default()
     }
 
     fn dirty_count(&self) -> usize {
@@ -83,7 +113,9 @@ fn to_toml(text: &str, ty: &str) -> Option<String> {
 }
 
 fn kind_of(item: &schema::Item) -> &'static str {
-    if item.color {
+    if item.token_set.is_some() {
+        "rows"
+    } else if item.color {
         "color"
     } else if item.ty == "bool" {
         "bool"
@@ -110,6 +142,60 @@ fn parse_hex(text: &str) -> Option<slint::Color> {
         _ => return None,
     };
     Some(slint::Color::from_rgb_u8(r, g, b))
+}
+
+/// Structured rows for a setting, or an empty model when it holds none.
+fn row_entries(state: &State, item: &schema::Item) -> ModelRc<RowEntry> {
+    let text = state
+        .effective(&item.path)
+        .unwrap_or_else(|| item.default.clone());
+    let parsed = rows::parse(&text).unwrap_or_default();
+    let entries: Vec<RowEntry> = parsed
+        .iter()
+        .map(|row| RowEntry {
+            preview: if row.is_empty() {
+                "(空の行)".into()
+            } else {
+                row.iter()
+                    .map(|t| t.token.clone())
+                    .collect::<Vec<_>>()
+                    .join("  ")
+                    .into()
+            },
+            tokens: ModelRc::new(VecModel::from(
+                row.iter()
+                    .map(|t| TokenCell {
+                        token: t.token.clone().into(),
+                        fg: t.fg.as_deref().and_then(parse_hex).unwrap_or(
+                            slint::Color::from_rgb_u8(205, 214, 244),
+                        ),
+                        has_fg: t.fg.is_some(),
+                        bold: t.bold.unwrap_or(false),
+                        dim: t.dim.unwrap_or(false),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(entries))
+}
+
+/// The token family the shown section's rows take, for the token dropdowns.
+fn allowed_tokens(state: &State) -> ModelRc<SharedString> {
+    let set = state
+        .schema
+        .sections
+        .get(state.selected)
+        .and_then(|s| s.items.iter().find_map(|i| i.token_set));
+    let mut names: Vec<SharedString> = match set {
+        Some("space") => overlay::SPACE_ROW_TOKENS.iter().map(|s| (*s).into()).collect(),
+        Some(_) => overlay::AGENT_ROW_TOKENS.iter().map(|s| (*s).into()).collect(),
+        None => Vec::new(),
+    };
+    if !names.is_empty() {
+        names.push(rows::CUSTOM_OPTION.into());
+    }
+    ModelRc::new(VecModel::from(names))
 }
 
 fn section_rows(state: &State) -> ModelRc<SectionRow> {
@@ -160,6 +246,7 @@ fn item_rows(state: &State) -> ModelRc<ItemRow> {
                 is_dirty: state.is_dirty(&item.path),
                 swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
                 has_swatch: swatch.is_some(),
+                rows: row_entries(state, item),
             }
         })
         .collect();
@@ -181,6 +268,7 @@ fn refresh(app: &App, state: &State) {
     app.set_section_title(section_title(state).into());
     app.set_selected(state.selected as i32);
     app.set_dirty_count(state.dirty_count() as i32);
+    app.set_allowed_tokens(allowed_tokens(state));
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -236,17 +324,99 @@ fn main() -> Result<(), slint::PlatformError> {
             let path = path.to_string();
             let ty = types.get(&path).cloned().unwrap_or_else(|| "string".into());
             let next = to_toml(&value, &ty);
-            let mut s = state.borrow_mut();
-            if next == s.saved.get(&path).cloned() {
-                s.edits.remove(&path);
-            } else {
-                s.edits.insert(path, next);
-            }
-            drop(s);
+            state.borrow_mut().set(&path, next);
             let app = weak.unwrap();
             let s = state.borrow();
             app.set_sections(section_rows(&s));
             app.set_dirty_count(s.dirty_count() as i32);
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_rows_act(move |path, action, row, index, delta| {
+            let path = path.to_string();
+            let (r, i, d) = (row.max(0) as usize, index.max(0) as usize, delta as isize);
+            let mut s = state.borrow_mut();
+            let mut rs = s.rows_of(&path);
+            let first_token = match s.item(&path).and_then(|it| it.token_set) {
+                Some("space") => overlay::SPACE_ROW_TOKENS[0],
+                _ => overlay::AGENT_ROW_TOKENS[0],
+            };
+            match action.as_str() {
+                "add-row" => rs.push(Vec::new()),
+                "del-row" if r < rs.len() => {
+                    rs.remove(r);
+                }
+                "move-row" => rows::move_row(&mut rs, r, d),
+                "add-token" if r < rs.len() => rs[r].push(rows::TokenSpec {
+                    token: first_token.to_string(),
+                    ..Default::default()
+                }),
+                "del-token" if r < rs.len() && i < rs[r].len() => {
+                    rs[r].remove(i);
+                }
+                "move-token" if r < rs.len() && i < rs[r].len() => {
+                    rows::move_token(&mut rs, r, i, d)
+                }
+                _ => return,
+            }
+            let next = rows::to_toml(&rs);
+            s.set(&path, Some(next));
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_rows_set_token(move |path, row, index, value| {
+            let path = path.to_string();
+            let (r, i) = (row.max(0) as usize, index.max(0) as usize);
+            let mut s = state.borrow_mut();
+            let mut rs = s.rows_of(&path);
+            if r >= rs.len() || i >= rs[r].len() {
+                return;
+            }
+            // Choosing "custom" seeds the sigil so the name has a start.
+            rs[r][i].token = if value == rows::CUSTOM_OPTION {
+                "$".to_string()
+            } else {
+                value.to_string()
+            };
+            let next = rows::to_toml(&rs);
+            s.set(&path, Some(next));
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_rows_set_flag(move |path, row, index, field, on| {
+            let path = path.to_string();
+            let (r, i) = (row.max(0) as usize, index.max(0) as usize);
+            let mut s = state.borrow_mut();
+            let mut rs = s.rows_of(&path);
+            if r >= rs.len() || i >= rs[r].len() {
+                return;
+            }
+            // An omitted field means "keep the contextual default", which is
+            // not the same as writing false, so flags are removed when off.
+            let cell = &mut rs[r][i];
+            match field.as_str() {
+                "fg-on" => cell.fg = on.then(|| "#cdd6f4".to_string()),
+                "bold" => cell.bold = on.then_some(true),
+                "dim" => cell.dim = on.then_some(true),
+                _ => return,
+            }
+            let next = rows::to_toml(&rs);
+            s.set(&path, Some(next));
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
         });
     }
     {
@@ -333,6 +503,26 @@ fn main() -> Result<(), slint::PlatformError> {
         println!("meta          : {}", app.get_meta());
         for (i, section) in s.schema.sections.iter().enumerate().take(3) {
             println!("  [{}] {} ({} 項目)", i, section.name, section.items.len());
+        }
+        // Point the dump at the rows section so its shape is visible.
+        if let Some(idx) = s
+            .schema
+            .sections
+            .iter()
+            .position(|x| x.name == "ui.sidebar.agents")
+        {
+            let section = &s.schema.sections[idx];
+            for item in section.items.iter().filter(|i| i.token_set.is_some()) {
+                let parsed = rows::parse(&item.default).unwrap_or_default();
+                println!(
+                    "rows 項目     : {} -> {} 行 / {} トークン  ({:?})",
+                    item.path,
+                    parsed.len(),
+                    parsed.iter().map(|r| r.len()).sum::<usize>(),
+                    item.token_set
+                );
+                println!("  再生成       : {}", rows::to_toml(&parsed));
+            }
         }
         let colors = s
             .schema

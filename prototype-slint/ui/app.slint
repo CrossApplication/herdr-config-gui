@@ -23,6 +23,19 @@ export struct SectionRow {
     set-count: int,
 }
 
+export struct TokenCell {
+    token: string,
+    fg: color,
+    has-fg: bool,
+    bold: bool,
+    dim: bool,
+}
+
+export struct RowEntry {
+    tokens: [TokenCell],
+    preview: string,
+}
+
 export struct ItemRow {
     path: string,
     key: string,
@@ -36,6 +49,8 @@ export struct ItemRow {
     is-dirty: bool,
     swatch: color,
     has-swatch: bool,
+    // Only populated when kind == "rows".
+    rows: [RowEntry],
 }
 
 // A chip: the three-state marker from the shipping UI.
@@ -76,11 +91,183 @@ component GhostButton inherits Rectangle {
     touch := TouchArea { clicked => { root.clicked(); } }
 }
 
+component TinyButton inherits Rectangle {
+    in property <string> label;
+    in property <color> tone: Palette.dim;
+    callback clicked();
+    border-color: touch.has-hover ? tone : Palette.line;
+    border-width: 1px;
+    border-radius: 4px;
+    width: 22px;
+    height: 18px;
+    Text {
+        text: root.label;
+        color: root.tone;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// One token: name, optional colour, bold/dim, and its move/remove controls.
+component TokenLine inherits Rectangle {
+    in property <TokenCell> cell;
+    in property <[string]> allowed;
+    in property <int> row-index;
+    in property <int> index;
+    callback act(string, int, int, int);
+    callback set-token(int, int, string);
+    callback set-flag(int, int, string, bool);
+
+    height: 30px;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        alignment: start;
+
+        ComboBox {
+            model: allowed;
+            current-value: cell.token;
+            width: 200px;
+            selected(v) => { root.set-token(row-index, index, v); }
+        }
+
+        // fg: a checkbox to turn it on, plus the swatch it resolves to.
+        CheckBox {
+            checked: cell.has-fg;
+            toggled => { root.set-flag(row-index, index, "fg-on", self.checked); }
+        }
+        Rectangle {
+            width: 26px;
+            height: 20px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Palette.line;
+            background: cell.has-fg ? cell.fg : Palette.row;
+            opacity: cell.has-fg ? 1.0 : 0.3;
+        }
+
+        CheckBox {
+            text: "B";
+            checked: cell.bold;
+            toggled => { root.set-flag(row-index, index, "bold", self.checked); }
+        }
+        CheckBox {
+            text: "D";
+            checked: cell.dim;
+            toggled => { root.set-flag(row-index, index, "dim", self.checked); }
+        }
+
+        TinyButton {
+            label: "←";
+            clicked => { root.act("move-token", row-index, index, -1); }
+        }
+        TinyButton {
+            label: "→";
+            clicked => { root.act("move-token", row-index, index, 1); }
+        }
+        TinyButton {
+            label: "×";
+            tone: Palette.red;
+            clicked => { root.act("del-token", row-index, index, 0); }
+        }
+    }
+}
+
+// The rows editor: a card per line, a line per token.
+component RowsEditor inherits VerticalLayout {
+    in property <[RowEntry]> rows;
+    in property <[string]> allowed;
+    callback act(string, int, int, int);
+    callback set-token(int, int, string);
+    callback set-flag(int, int, string, bool);
+
+    spacing: 8px;
+
+    for r[ri] in rows: Rectangle {
+        background: #1e1e2e80;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 8px;
+        height: card.preferred-height;
+
+        card := VerticalLayout {
+            spacing: 0px;
+
+            Rectangle {
+                height: 28px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 10px;
+                    Text {
+                        text: (ri + 1) + " 行目";
+                        color: Palette.accent;
+                        font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: r.preview;
+                        color: Palette.dim;
+                        font-family: "Menlo";
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    TinyButton {
+                        label: "↑";
+                        clicked => { root.act("move-row", ri, 0, -1); }
+                    }
+                    TinyButton {
+                        label: "↓";
+                        clicked => { root.act("move-row", ri, 0, 1); }
+                    }
+                    TinyButton {
+                        label: "×";
+                        tone: Palette.red;
+                        clicked => { root.act("del-row", ri, 0, 0); }
+                    }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.line; }
+            }
+
+            for t[ti] in r.tokens: TokenLine {
+                cell: t;
+                allowed: root.allowed;
+                row-index: ri;
+                index: ti;
+                act(a, rr, ii, d) => { root.act(a, rr, ii, d); }
+                set-token(rr, ii, v) => { root.set-token(rr, ii, v); }
+                set-flag(rr, ii, f, on) => { root.set-flag(rr, ii, f, on); }
+            }
+
+            GhostButton {
+                label: "＋ トークンを追加";
+                tone: Palette.accent;
+                clicked => { root.act("add-token", ri, 0, 0); }
+            }
+        }
+    }
+
+    GhostButton {
+        label: "＋ 行を追加";
+        tone: Palette.accent;
+        clicked => { root.act("add-row", 0, 0, 0); }
+    }
+}
+
 // One setting. The 3px bar on the left is the state marker.
 component SettingRow inherits Rectangle {
     in property <ItemRow> item;
+    in property <[string]> allowed;
     callback edited(string, string);
     callback swatch-clicked(string);
+    callback rows-act(string, string, int, int, int);
+    callback rows-set-token(string, int, int, string);
+    callback rows-set-flag(string, int, int, string, bool);
 
     height: layout.preferred-height + 16px;
     background: item.is-dirty ? #89b4fa14 : transparent;
@@ -136,7 +323,15 @@ component SettingRow inherits Rectangle {
                 selected(v) => { root.edited(item.path, v == "true" || v == "false" ? v : ""); }
             }
 
-            if item.kind != "bool": LineEdit {
+            if item.kind == "rows": Text {
+                text: item.rows.length + " 行";
+                color: Palette.set;
+                font-size: 11px;
+                vertical-alignment: center;
+                width: 240px;
+            }
+
+            if item.kind != "bool" && item.kind != "rows": LineEdit {
                 text: item.value;
                 placeholder-text: item.default-text == "" ? "(未設定)" : item.default-text;
                 width: 240px;
@@ -159,6 +354,14 @@ component SettingRow inherits Rectangle {
             font-size: 12px;
             wrap: word-wrap;
             width: parent.width;
+        }
+
+        if item.kind == "rows": RowsEditor {
+            rows: item.rows;
+            allowed: root.allowed;
+            act(a, r, i, d) => { root.rows-act(item.path, a, r, i, d); }
+            set-token(r, i, v) => { root.rows-set-token(item.path, r, i, v); }
+            set-flag(r, i, f, on) => { root.rows-set-flag(item.path, r, i, f, on); }
         }
     }
 
@@ -183,10 +386,14 @@ export component App inherits Window {
     in property <int> dirty-count: 0;
     in property <string> result;
     in property <bool> show-about: false;
+    in property <[string]> allowed-tokens;
 
     callback select-section(int);
     callback edited(string, string);
     callback swatch-clicked(string);
+    callback rows-act(string, string, int, int, int);
+    callback rows-set-token(string, int, int, string);
+    callback rows-set-flag(string, int, int, string, bool);
     callback preview();
     callback revert();
     callback toggle-about();
@@ -298,8 +505,12 @@ export component App inherits Window {
                     }
                     for it in items: SettingRow {
                         item: it;
+                        allowed: root.allowed-tokens;
                         edited(p, v) => { root.edited(p, v); }
                         swatch-clicked(p) => { root.swatch-clicked(p); }
+                        rows-act(p, a, r, i, d) => { root.rows-act(p, a, r, i, d); }
+                        rows-set-token(p, r, i, v) => { root.rows-set-token(p, r, i, v); }
+                        rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
                     }
                 }
             }

@@ -26,5 +26,33 @@ Rust の中核 5 モジュールは **コピーせず、同じファイルをそ
 
 ```sh
 cd prototype-slint
-cargo run
+cargo run --release              # 描画が軽いので release 推奨
+cargo test -- --test-threads=1   # 共有モジュールが単一スレッドを要求する
+PROTO_DUMP=1 cargo run           # ウィンドウを開かずデータだけ確認
 ```
+
+## 検証済みの論点
+
+| 論点 | 結果 |
+| --- | --- |
+| 現行のカラーパレット | 値をそのまま移せる |
+| 3 状態の行（バー・チップ） | 再現できた |
+| セクションサイドバーと件数 | 再現できた |
+| **入れ子リスト（行 × トークン）** | Slint の struct は配列フィールドを持てる。`struct RowEntry { tokens: [TokenCell] }` と `for r in rows: for t in r.tokens:` で表現できた |
+| ホバー | CSS の `:hover` はなく、`TouchArea` + `has-hover` を明示的に書く |
+| カラーピッカー | **標準ウィジェットがない。未実装** |
+
+## 行エディタについて
+
+`src/rows.ts`（TypeScript・223 行）に相当するものを `src/rows.rs` として書いた。
+`toml_edit` が TOML を解釈してくれるため、**手書きトークナイザ約 90 行が不要になり短くなった**。
+
+既定値の往復が TypeScript 版と一致することをテストで固定している。
+
+```
+[["state_icon", "machine", "workspace", "tab"], ["agent"]]
+  -> 2 行 / 5 トークン -> 同一文字列に再生成
+```
+
+スタイルのフラグは OFF のときフィールドごと削除する（herdr にとって省略は
+「文脈の既定を維持」であり `false` とは別の値であるため）。現行版と同じ扱い。
