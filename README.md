@@ -5,6 +5,139 @@
 herdr には組み込みの設定画面がないため、設定変更はエディタで `config.toml` を直接書くことになる。
 このアプリは設定項目をフォームとして提供しつつ、ファイルの手書き部分を壊さない。
 
+## インストール
+
+### 共通の前提
+
+ビルドには Rust (stable) と Node.js 24 以上が必要。加えて OS ごとに以下が要る。
+
+| OS | 追加で必要なもの |
+| --- | --- |
+| macOS | Xcode Command Line Tools |
+| Linux | `libwebkit2gtk-4.1-dev` `libayatana-appindicator3-dev` `librsvg2-dev` `libxdo-dev` `libssl-dev` `build-essential` |
+| Windows | Visual Studio Build Tools (MSVC)、WebView2 ランタイム (Windows 11 は同梱) |
+
+### ソースからビルドする
+
+```sh
+git clone https://github.com/CrossApplication/herdr-config-gui.git
+cd herdr-config-gui
+npm install
+npm run tauri build
+```
+
+成果物は `src-tauri/target/release/bundle/` の下に出る。
+
+| OS | 出力 |
+| --- | --- |
+| macOS | `macos/herdr Config.app`、`dmg/herdr Config_<version>_aarch64.dmg` |
+| Linux | `deb/*.deb`、`appimage/*.AppImage` |
+| Windows | `msi/*.msi`、`nsis/*-setup.exe` |
+
+macOS で `.app` だけ欲しい場合は `npm run tauri build -- --bundles app`。
+
+### macOS
+
+**ビルド済みファイルは配布していない。上記の手順でソースからビルドすること。**
+
+理由は[配布方針](#配布方針)に書いた。ローカルでビルドしたものには quarantine 属性が付かないので、
+そのまま `/Applications` にコピーして使える。
+
+対応は Apple Silicon (aarch64) のみ。Intel Mac は対象外。
+
+### Linux
+
+Releases の `.deb` または `.AppImage` を使う。署名によるゲートはないのでそのまま動く。
+
+### Windows
+
+Releases の `.msi` または `-setup.exe` を使う。
+
+初回実行時に **SmartScreen の「Windows によって PC が保護されました」** という警告が出る。
+これは署名がないため。「詳細情報」→「実行」で進められる。ブロックではなく警告である。
+
+> 現時点ではリリースワークフローが未整備で、Releases にビルド済みファイルは添付されていない。
+> ビルドしたい場合は上記のソースビルドを使うこと。
+
+## 配布方針
+
+費用のかかる署名手段は使わない方針のため、OS ごとに扱いを変えている。
+
+### macOS でバイナリを配らない理由
+
+macOS Sequoia (15) で、Control+クリックによる Gatekeeper 回避が削除された。署名も公証もない
+アプリをダウンロードした場合、システム設定 → プライバシーとセキュリティ から明示的に許可するか、
+次を実行する必要がある。
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/herdr Config.app"
+```
+
+問題は手間ではなく、**「警告が出たら quarantine を外す」という習慣を配布者が広めることになる**点にある。
+この操作は OS のマルウェア対策を無効化するもので、覚えた習慣は他のアプリにも転用される。
+Apple がこの回避手段を削ったのは、まさに署名のないアプリを装うマルウェアへの対策だった。
+
+`xattr` の手順を README に書いて済ませるより、ソースからビルドしてもらうほうが誠実だと判断した。
+想定利用者は herdr を使っている開発者であり、Rust と Node が入っている可能性も高い。
+
+正規の配布には Developer ID Application 証明書が必要で、Apple Developer Program (年 $99) への
+加入が前提になる。これを用意できた時点で方針を変える。Tauri は環境変数を渡すだけで署名と公証まで
+行うため、CI 側の変更はわずかで済む。
+
+```yaml
+env:
+  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+  APPLE_SIGNING_IDENTITY: "Developer ID Application: ..."
+  APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+  APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+  APPLE_API_KEY_PATH: ${{ runner.temp }}/key.p8
+```
+
+### Windows は警告付きで配る
+
+SmartScreen はブロックではなく警告であり、利用者が自分で進める余地がある。
+ただし署名がないと更新のたびに評判がリセットされ、警告は出続ける。
+
+無償で解決する手段として [SignPath Foundation](https://signpath.org/) がある。OSS であれば
+OV 相当の証明書による署名を無料で提供している。public 化したあとに申請する。
+
+Azure Artifact Signing (旧 Trusted Signing) は月 $9.99 と安価だが、組織の Public Trust 検証に
+3 年以上の納税履歴が必要なため、選択肢から外した。
+
+### Linux はそのまま配る
+
+署名によるゲートがないため、追加の対応は不要。
+
+### ビルド成果物の検証 (public 化後)
+
+[GitHub Artifact Attestations](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds)
+を使うと、成果物が**どのコミットからどのワークフローで生成されたか**を Sigstore の署名付きで証明できる。
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+  attestations: write
+steps:
+  - uses: actions/attest-build-provenance@v3
+    with:
+      subject-path: src-tauri/target/release/bundle/**/*
+```
+
+利用者側の検証はこうなる。
+
+```sh
+gh attestation verify "herdr Config_0.1.0_aarch64.dmg" --repo CrossApplication/herdr-config-gui
+```
+
+Apple の公証が「Apple が把握している開発者が作り、マルウェアスキャンを通った」ことを示すのに対し、
+attestation は「公開されたソースのこのコミットから、公開された CI で作られた」ことを示す。
+OSS の文脈では後者のほうが検証可能性が高い。
+
+ただし **GitHub Free / Pro / Team では public リポジトリでのみ利用できる**。
+private の間は使えないため、public 化とセットで導入する。
+
 ## 設計方針
 
 ### 設定項目表を内蔵しない
@@ -41,7 +174,8 @@ herdr のバイナリが唯一のスキーマ源なので、herdr が更新さ�
 
 ## 対応プラットフォーム
 
-herdr の配布に合わせて macOS (x86_64 / aarch64)、Linux (x86_64 / aarch64)、Windows (x86_64)。
+herdr の配布に合わせて macOS、Linux、Windows。ただし macOS は Apple Silicon (aarch64) のみを
+対象とし、Intel Mac は対象外とする。
 
 ### 設定ファイルの場所は herdr に聞く
 
@@ -122,7 +256,9 @@ herdr は `width = "120"` を拒否するため、入力に応じてクォート
 ### バイナリの探索
 
 GUI は Finder / Explorer から起動するとシェルの PATH を継承しないため、PATH で
-見つからない場合は各 OS のインストール先を探す。Windows では `.exe` 付きで
+見つからない場合は各 OS のインストール先を探す。この経路は macOS のバンドル済み
+`.app` を PATH なしで起動して検証済み（`~/.local/bin/herdr` を発見する）。
+Windows と Linux では未検証。Windows では `.exe` 付きで
 `%LOCALAPPDATA%\Programs\Herdr\bin`、`%USERPROFILE%\.local\bin`、
 それと `%USERPROFILE%\.herdr\packages\standalone\releases` 配下の最新
 バージョンディレクトリを見る。
@@ -217,9 +353,11 @@ navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢�
   `ui.sidebar.agents.rows` は「行 × トークン」の二次元配列で手打ちは辛い
 - Linux / Windows は CI でビルドとテストが通ることまでしか確認していない。実機での
   ウィンドウ描画、キー録音（WebView2 の `KeyboardEvent`、日本語配列の記号キー）、
-  バイナリ探索のフォールバック、インストーラは未検証
-- 配布まわり未着手（`.icns` / `.ico` 未生成のため `tauri build` でのバンドルは不可、
-  macOS の署名・公証なし）
+  バイナリ探索のフォールバック、インストーラは未検証。
+  `tauri build` によるバンドル生成も macOS (`.app` / `.dmg`) でしか通していない
+- リリースワークフローが未整備。タグを打っても Releases にビルド済みファイルは付かない
+- 署名は一切していない。macOS の `.app` はリンカによる ad-hoc 署名のみで、
+  `spctl` は通らない（ローカルビルドは quarantine が付かないため動作する）
 - `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
 - 依存の `glib 0.18.5` に moderate の脆弱性報告があるが、Tauri の Linux バックエンド
   (`gtk 0.18` が `glib = "^0.18"` を要求) 経由のため当リポジトリでは上げられない
