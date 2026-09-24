@@ -64,6 +64,50 @@ herdr は `[theme.custom]` の色を一切検証しない（`accent = "notacolor
 行エディタの `fg` スウォッチからも同じピッカーを開く。書き戻し先は
 `PickerTarget::Item` と `PickerTarget::RowFg` で切り替える。
 
+## キー録音
+
+実機の打鍵をログに記録して確認した結果を `src/keys.rs` のテストに固定してある。
+
+### Slint が渡すもの
+
+**論理キー（レイアウトが生成する文字）と修飾キーのフラグのみ。物理キーコードはない。**
+Slint 自身のドキュメントが "bindings are based on logical keys ... not the physical
+position of a key" と明記している。ブラウザの `KeyboardEvent` は `ev.key`（論理）と
+`ev.code`（物理）の両方を渡すので、**この一点だけはブラウザのほうが情報量が多い**。
+
+実測結果（macOS）:
+
+| 押したキー | Slint が渡す内容 | 生成されるチョード |
+| --- | --- | --- |
+| ctrl+a | `text="a"` ctrl=true | `ctrl+a` |
+| cmd+a | `text="a"` meta=true | `cmd+a` |
+| shift+7 | `text="&"` shift=true | `ampersand` |
+| **option+a** | **`text="å"` alt=true** | **`alt+å`** |
+| esc / f12 | `Key.Escape` / `Key.F12` | `esc` / `f12` |
+
+修飾キーは正しく届く。ctrl と cmd が入れ替わるようなことはない。
+
+### 唯一の制約
+
+macOS の option は文字を合成する。`option+a` は `å` として届き、**物理キーがないため
+`a` に戻せない**。現行版は `ev.code = "KeyA"` から `alt+a` を復元しているが、Slint では
+できず、合成後の文字で記録される。
+
+herdr 自身が「alt は端末や tmux の設定次第で届かない」と警告している領域なので実害は
+限定的だが、macOS で alt を含むバインドを録音する場合は現行版のほうが正確。
+
+### 全キーを奪えるか
+
+奪える。ログに `cmd+q` が記録されており、**アプリは終了しなかった**。
+`FocusScope` が `accept` を返す限り、OS のショートカットも含めて飲み込む。
+
+### 2 フェーズ
+
+Esc と Enter 自体をバインドできるよう、録音中は全キーを飲み込み、確定後に
+Esc = キャンセル / Enter = 確定へ切り替わる。確定後は打鍵を無視するため、
+**「録音中 / 録音停止中」を大きく表示する**。これがないと、停止中に押したキーが
+反映されず「間違ったキーが出た」ように見える。
+
 ## 行エディタについて
 
 `src/rows.ts`（TypeScript・223 行）に相当するものを `src/rows.rs` として書いた。

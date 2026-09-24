@@ -21,6 +21,9 @@ mod schema;
 /// Colour notations and HSV, for the picker.
 mod color;
 
+/// Keybinding syntax from a Slint key event.
+mod keys;
+
 /// The rows editor's own logic, which has no counterpart in the Tauri build:
 /// there it lives in TypeScript as `src/rows.ts`.
 mod rows;
@@ -52,6 +55,19 @@ struct Picker {
     text: String,
 }
 
+/// A capture in progress. Two phases, because Esc and Enter are bindable:
+/// while `recording` every keypress becomes a chord; afterwards Esc cancels
+/// and Enter confirms.
+#[derive(Clone, Debug)]
+struct Capture {
+    path: String,
+    kind: String,
+    /// Set once the configured prefix key has been pressed.
+    prefix_armed: bool,
+    recording: bool,
+    chord: String,
+}
+
 /// The palette the app itself uses, offered as presets.
 const PRESETS: &[&str] = &[
     "#11111b", "#181825", "#1e1e2e", "#313244", "#45475a", "#7f849c", "#cdd6f4", "#89b4fa",
@@ -67,6 +83,7 @@ struct State {
     edits: BTreeMap<String, Option<String>>,
     selected: usize,
     picker: Option<Picker>,
+    capture: Option<Capture>,
 }
 
 impl State {
@@ -174,6 +191,14 @@ impl State {
             }
         }
         self.commit_picker();
+    }
+
+    /// The prefix chord in effect, needed to fold `prefix+X`.
+    fn prefix_chord(&self) -> String {
+        self.effective("keys.prefix")
+            .or_else(|| self.item("keys.prefix").map(|i| i.default.clone()))
+            .map(|v| display(&v))
+            .unwrap_or_default()
     }
 
     fn dirty_count(&self) -> usize {
@@ -342,6 +367,7 @@ fn item_rows(state: &State) -> ModelRc<ItemRow> {
                 swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
                 has_swatch: swatch.is_some(),
                 rows: row_entries(state, item),
+                is_binding: item.binding_kind.is_some(),
             }
         })
         .collect();
@@ -393,6 +419,49 @@ fn refresh_picker(app: &App, state: &State) {
     )));
 }
 
+fn refresh_capture(app: &App, state: &State) {
+    let Some(c) = &state.capture else {
+        app.set_capture_open(false);
+        return;
+    };
+    let uses_prefix = c.kind == "action" || c.kind == "command";
+    let prefix = state.prefix_chord();
+    let hint = if c.recording {
+        match c.kind.as_str() {
+            "prefix" => "新しい prefix キーを押してください（prefix+ は付きません）".to_string(),
+            "navigate" => "navigate モード中に使う単独キーを押してください".to_string(),
+            _ if uses_prefix && !prefix.is_empty() => format!(
+                "キーを押してください。先に prefix ({prefix}) を押すと prefix モードのバインドになります。"
+            ),
+            _ => "キーを押してください。".to_string(),
+        }
+    } else {
+        "Esc でキャンセル、Enter で確定。もう一度録音もできます。".to_string()
+    };
+
+    let (level, note) = if c.chord.is_empty() {
+        ("", String::new())
+    } else {
+        let (lvl, reason) = keys::risk(&c.chord, &c.kind);
+        (lvl, reason.to_string())
+    };
+
+    app.set_capture_open(true);
+    app.set_capture_title(format!("{} ({})", c.path, c.kind).into());
+    app.set_capture_hint(hint.into());
+    app.set_capture_chord(
+        if c.prefix_armed && c.chord.is_empty() {
+            format!("{prefix} + …")
+        } else {
+            c.chord.clone()
+        }
+        .into(),
+    );
+    app.set_capture_note(note.into());
+    app.set_capture_level(level.into());
+    app.set_capture_recording(c.recording);
+}
+
 fn section_title(state: &State) -> String {
     match state.schema.sections.get(state.selected) {
         Some(s) if s.array_of_tables => format!("[[{}]]", s.name),
@@ -410,6 +479,7 @@ fn refresh(app: &App, state: &State) {
     app.set_dirty_count(state.dirty_count() as i32);
     app.set_allowed_tokens(allowed_tokens(state));
     refresh_picker(app, state);
+    refresh_capture(app, state);
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -434,6 +504,7 @@ fn main() -> Result<(), slint::PlatformError> {
         edits: BTreeMap::new(),
         selected: 0,
         picker: None,
+        capture: None,
     }));
 
     let app = App::new()?;
@@ -568,6 +639,146 @@ fn main() -> Result<(), slint::PlatformError> {
             state
                 .borrow_mut()
                 .open_picker(PickerTarget::Item(path.to_string()));
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_record(move |path| {
+            let mut s = state.borrow_mut();
+            let kind = s
+                .item(&path)
+                .and_then(|i| i.binding_kind)
+                .unwrap_or("action")
+                .to_string();
+            s.capture = Some(Capture {
+                path: path.to_string(),
+                kind,
+                prefix_armed: false,
+                recording: true,
+                chord: String::new(),
+            });
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_capture_pressed(move |key, ctrl, shift, alt, meta| {
+            // Raw record of what Slint hands us, so real hardware presses can
+            // be compared against what the browser build sees.
+            eprintln!(
+                "[key] slint={key:?} codepoints=[{}] ctrl={ctrl} shift={shift} alt={alt} meta={meta}",
+                key.chars()
+                    .map(|c| format!("U+{:04X}", c as u32))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            let mut s = state.borrow_mut();
+            let prefix = s.prefix_chord();
+            let Some(c) = s.capture.as_mut() else { return };
+
+            if !c.recording {
+                // Esc and Enter only act once a chord has been captured, so
+                // they remain bindable themselves.
+                match key.as_str() {
+                    "esc" => s.capture = None,
+                    "enter" => {
+                        let chord = c.chord.clone();
+                        let path = c.path.clone();
+                        s.capture = None;
+                        if !chord.is_empty() {
+                            s.set(&path, Some(format!("{chord:?}")));
+                        }
+                    }
+                    _ => {}
+                }
+                drop(s);
+                let app = weak.unwrap();
+                refresh(&app, &state.borrow());
+                return;
+            }
+
+            let raw = keys::RawKey {
+                key: key.to_string(),
+                ctrl,
+                shift,
+                alt,
+                meta,
+            };
+            let Some(chord) = keys::from_event(&raw, cfg!(target_os = "macos")) else {
+                return; // modifiers only: keep waiting
+            };
+
+            let uses_prefix = c.kind == "action" || c.kind == "command";
+            if uses_prefix && !c.prefix_armed && !prefix.is_empty() && chord == prefix {
+                c.prefix_armed = true;
+            } else {
+                c.chord = if c.prefix_armed {
+                    keys::with_prefix(&chord)
+                } else {
+                    chord
+                };
+                c.recording = false;
+            }
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_capture_again(move || {
+            if let Some(c) = state.borrow_mut().capture.as_mut() {
+                c.recording = true;
+                c.prefix_armed = false;
+                c.chord.clear();
+            }
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_capture_confirm(move || {
+            let mut s = state.borrow_mut();
+            if let Some(c) = s.capture.clone() {
+                s.capture = None;
+                if !c.chord.is_empty() {
+                    s.set(&c.path, Some(format!("{:?}", c.chord)));
+                }
+            }
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_capture_clear(move || {
+            let mut s = state.borrow_mut();
+            if let Some(c) = s.capture.clone() {
+                s.capture = None;
+                // herdr's own way of unbinding an action.
+                s.set(&c.path, Some("\"\"".into()));
+            }
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_capture_cancel(move || {
+            state.borrow_mut().capture = None;
             let app = weak.unwrap();
             refresh(&app, &state.borrow());
         });

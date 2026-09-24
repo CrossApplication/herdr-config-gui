@@ -51,6 +51,7 @@ export struct ItemRow {
     has-swatch: bool,
     // Only populated when kind == "rows".
     rows: [RowEntry],
+    is-binding: bool,
 }
 
 // A chip: the three-state marker from the shipping UI.
@@ -451,6 +452,162 @@ component ColorPicker inherits Rectangle {
     }
 }
 
+// Key capture. Two phases, because Esc and Enter are themselves bindable:
+// while recording every keypress is swallowed and turned into a chord; once
+// captured, Esc cancels and Enter confirms.
+component KeyCapture inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    in property <string> chord;
+    in property <string> note;
+    in property <string> level;
+    in property <bool> recording;
+    callback pressed(string, bool, bool, bool, bool);
+    callback again();
+    callback confirm();
+    callback cancel();
+    callback clear();
+
+    background: #11111bb8;
+    TouchArea { clicked => { root.cancel(); } }
+
+    // Names the platform-specific codepoints here so Rust never sees them.
+    function name-of(t: string) -> string {
+        return t == Key.Escape ? "esc"
+            : t == Key.Return ? "enter"
+            : t == Key.Tab ? "tab"
+            : t == Key.Backspace ? "backspace"
+            : t == Key.Delete ? "delete"
+            : t == Key.Space ? "space"
+            : t == Key.UpArrow ? "up"
+            : t == Key.DownArrow ? "down"
+            : t == Key.LeftArrow ? "left"
+            : t == Key.RightArrow ? "right"
+            : t == Key.Home ? "home"
+            : t == Key.End ? "end"
+            : t == Key.PageUp ? "pageup"
+            : t == Key.PageDown ? "pagedown"
+            : t == Key.Shift || t == Key.ShiftR ? "shift"
+            : t == Key.Control || t == Key.ControlR ? "ctrl"
+            : t == Key.Alt ? "alt"
+            : t == Key.Meta || t == Key.MetaR ? "cmd"
+            : t == Key.CapsLock ? "caps"
+            : t == Key.F1 ? "f1" : t == Key.F2 ? "f2" : t == Key.F3 ? "f3"
+            : t == Key.F4 ? "f4" : t == Key.F5 ? "f5" : t == Key.F6 ? "f6"
+            : t == Key.F7 ? "f7" : t == Key.F8 ? "f8" : t == Key.F9 ? "f9"
+            : t == Key.F10 ? "f10" : t == Key.F11 ? "f11" : t == Key.F12 ? "f12"
+            : t;
+    }
+
+    Rectangle {
+        width: 420px;
+        height: box.preferred-height + 32px;
+        background: Palette.panel;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 10px;
+        TouchArea { }
+
+        fs := FocusScope {
+            key-pressed(e) => {
+                root.pressed(name-of(e.text), e.modifiers.control, e.modifiers.shift,
+                             e.modifiers.alt, e.modifiers.meta);
+                return accept;
+            }
+        }
+
+        box := VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text: root.title;
+                color: Palette.accent;
+                font-family: "Menlo";
+                font-size: 12px;
+                font-weight: 600;
+            }
+            Text {
+                text: root.hint;
+                color: Palette.dim;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            // The phase has to be unmissable: once a chord is captured the
+            // modal stops listening, and a stale chord looks like a wrong one.
+            Rectangle {
+                height: 22px;
+                border-radius: 11px;
+                background: root.recording ? Palette.red : Palette.line;
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.recording ? "● 録音中 — 次の打鍵を待っています"
+                                             : "■ 録音停止中 — 変更するには「もう一度録音」";
+                        color: root.recording ? #11111b : Palette.text;
+                        font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 66px;
+                border-radius: 8px;
+                background: Palette.row;
+                border-width: root.recording ? 1px : 2px;
+                border-color: root.level == "err" ? Palette.red
+                    : root.level == "risky" ? #fab387
+                    : root.level == "caution" ? Palette.warn
+                    : root.level == "safe" ? Palette.set
+                    : Palette.faint;
+                Text {
+                    text: root.chord == "" ? "キー入力待ち…" : root.chord;
+                    color: root.chord == "" ? Palette.dim : Palette.text;
+                    font-family: "Menlo";
+                    font-size: root.chord == "" ? 14px : 22px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.note != "": Text {
+                text: root.note;
+                color: root.level == "err" ? Palette.red : Palette.dim;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                GhostButton {
+                    label: "もう一度録音";
+                    clicked => { root.again(); }
+                }
+                GhostButton {
+                    label: "無効にする";
+                    tone: Palette.warn;
+                    clicked => { root.clear(); }
+                }
+                Rectangle { }
+                GhostButton {
+                    label: "キャンセル";
+                    clicked => { root.cancel(); }
+                }
+                GhostButton {
+                    label: "確定";
+                    tone: Palette.accent;
+                    clicked => { root.confirm(); }
+                }
+            }
+        }
+        init => { fs.focus(); }
+    }
+}
+
 // One setting. The 3px bar on the left is the state marker.
 component SettingRow inherits Rectangle {
     in property <ItemRow> item;
@@ -461,6 +618,7 @@ component SettingRow inherits Rectangle {
     callback rows-set-token(string, int, int, string);
     callback rows-set-flag(string, int, int, string, bool);
     callback rows-open-fg(string, int, int);
+    callback record(string);
 
     height: layout.preferred-height + 16px;
     background: item.is-dirty ? #89b4fa14 : transparent;
@@ -531,6 +689,12 @@ component SettingRow inherits Rectangle {
                 edited(v) => { root.edited(item.path, v); }
             }
 
+            if item.is-binding: GhostButton {
+                label: "キーを録音";
+                tone: Palette.accent;
+                clicked => { root.record(item.path); }
+            }
+
             Text {
                 text: "既定 " + item.default-text;
                 color: Palette.faint;
@@ -592,6 +756,13 @@ export component App inherits Window {
     in property <float> picker-val;
     in property <[color]> picker-presets;
     in property <bool> picker-allow-reset;
+    in property <bool> capture-open: false;
+    in property <string> capture-title;
+    in property <string> capture-hint;
+    in property <string> capture-chord;
+    in property <string> capture-note;
+    in property <string> capture-level;
+    in property <bool> capture-recording: true;
 
     callback picker-pick-sv(float, float);
     callback picker-pick-hue(float);
@@ -606,6 +777,12 @@ export component App inherits Window {
     callback rows-set-token(string, int, int, string);
     callback rows-set-flag(string, int, int, string, bool);
     callback rows-open-fg(string, int, int);
+    callback record(string);
+    callback capture-pressed(string, bool, bool, bool, bool);
+    callback capture-again();
+    callback capture-confirm();
+    callback capture-cancel();
+    callback capture-clear();
     callback preview();
     callback revert();
     callback toggle-about();
@@ -724,6 +901,7 @@ export component App inherits Window {
                         rows-set-token(p, r, i, v) => { root.rows-set-token(p, r, i, v); }
                         rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
                         rows-open-fg(p, r, i) => { root.rows-open-fg(p, r, i); }
+                        record(p) => { root.record(p); }
                     }
                 }
             }
@@ -763,6 +941,20 @@ export component App inherits Window {
                 }
             }
         }
+    }
+
+    if capture-open: KeyCapture {
+        title: capture-title;
+        hint: capture-hint;
+        chord: capture-chord;
+        note: capture-note;
+        level: capture-level;
+        recording: capture-recording;
+        pressed(k, c, s, a, m) => { root.capture-pressed(k, c, s, a, m); }
+        again() => { root.capture-again(); }
+        confirm() => { root.capture-confirm(); }
+        cancel() => { root.capture-cancel(); }
+        clear() => { root.capture-clear(); }
     }
 
     // Painted last so it covers the whole window.
