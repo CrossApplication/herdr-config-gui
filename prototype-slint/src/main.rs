@@ -18,6 +18,9 @@ mod overlay;
 #[path = "../../src-tauri/src/schema.rs"]
 mod schema;
 
+/// Colour notations and HSV, for the picker.
+mod color;
+
 /// The rows editor's own logic, which has no counterpart in the Tauri build:
 /// there it lives in TypeScript as `src/rows.ts`.
 mod rows;
@@ -30,6 +33,31 @@ use slint::{ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
 
+/// What the open picker will write back to.
+#[derive(Clone, Debug)]
+enum PickerTarget {
+    /// A colour setting such as `theme.custom.accent`.
+    Item(String),
+    /// A sidebar row token's `fg`, which accepts hex only.
+    RowFg(String, usize, usize),
+}
+
+#[derive(Clone, Debug)]
+struct Picker {
+    target: PickerTarget,
+    hue: f32,
+    sat: f32,
+    val: f32,
+    /// Verbatim text, so names and `rgb()` survive being typed.
+    text: String,
+}
+
+/// The palette the app itself uses, offered as presets.
+const PRESETS: &[&str] = &[
+    "#11111b", "#181825", "#1e1e2e", "#313244", "#45475a", "#7f849c", "#cdd6f4", "#89b4fa",
+    "#a6e3a1", "#f9e2af", "#f38ba8", "#cba6f7",
+];
+
 /// Everything the window needs, kept on the Rust side.
 struct State {
     schema: schema::Schema,
@@ -38,6 +66,7 @@ struct State {
     /// Touched settings; `None` means "back to the default".
     edits: BTreeMap<String, Option<String>>,
     selected: usize,
+    picker: Option<Picker>,
 }
 
 impl State {
@@ -79,6 +108,72 @@ impl State {
             .or_else(|| self.item(path).map(|i| i.default.clone()))
             .unwrap_or_default();
         rows::parse(&text).unwrap_or_default()
+    }
+
+    /// Open the picker on a setting, seeded from whatever it holds now.
+    fn open_picker(&mut self, target: PickerTarget) {
+        let text = match &target {
+            PickerTarget::Item(path) => self
+                .effective(path)
+                .map(|v| display(&v))
+                .or_else(|| self.item(path).map(|i| display(&i.default)))
+                .unwrap_or_default(),
+            PickerTarget::RowFg(path, r, i) => self
+                .rows_of(path)
+                .get(*r)
+                .and_then(|row| row.get(*i))
+                .and_then(|t| t.fg.clone())
+                .unwrap_or_else(|| "#cdd6f4".into()),
+        };
+        let (h, sa, v) = color::to_rgb(&text)
+            .map(|(r, g, b)| color::rgb_to_hsv(r, g, b))
+            .unwrap_or((0.0, 0.0, 0.8));
+        self.picker = Some(Picker { target, hue: h, sat: sa, val: v, text });
+    }
+
+    /// Write the picker's current text back to whatever it was opened on.
+    fn commit_picker(&mut self) {
+        let Some(p) = self.picker.clone() else { return };
+        match &p.target {
+            PickerTarget::Item(path) => {
+                let value = (!p.text.trim().is_empty()).then(|| format!("{:?}", p.text));
+                self.set(path, value);
+            }
+            PickerTarget::RowFg(path, r, i) => {
+                let mut rs = self.rows_of(path);
+                if let Some(cell) = rs.get_mut(*r).and_then(|row| row.get_mut(*i)) {
+                    cell.fg = Some(p.text.clone());
+                    let next = rows::to_toml(&rs);
+                    self.set(path, Some(next));
+                }
+            }
+        }
+    }
+
+    /// Move the picker to an HSV point and keep the text in step.
+    fn picker_hsv(&mut self, hue: f32, sat: f32, val: f32) {
+        if let Some(p) = &mut self.picker {
+            p.hue = hue.clamp(0.0, 1.0);
+            p.sat = sat.clamp(0.0, 1.0);
+            p.val = val.clamp(0.0, 1.0);
+            let (r, g, b) = color::hsv_to_rgb(p.hue, p.sat, p.val);
+            p.text = color::to_hex(r, g, b);
+        }
+        self.commit_picker();
+    }
+
+    fn picker_text(&mut self, text: String) {
+        if let Some(p) = &mut self.picker {
+            p.text = text;
+            // Follow the text when it names a colour we can locate.
+            if let Some((r, g, b)) = color::to_rgb(&p.text) {
+                let (h, s, v) = color::rgb_to_hsv(r, g, b);
+                p.hue = h;
+                p.sat = s;
+                p.val = v;
+            }
+        }
+        self.commit_picker();
     }
 
     fn dirty_count(&self) -> usize {
@@ -253,6 +348,51 @@ fn item_rows(state: &State) -> ModelRc<ItemRow> {
     ModelRc::new(VecModel::from(rows))
 }
 
+fn refresh_picker(app: &App, state: &State) {
+    let Some(p) = &state.picker else {
+        app.set_picker_open(false);
+        return;
+    };
+    let (hr, hg, hb) = color::hsv_to_rgb(p.hue, 1.0, 1.0);
+    let preview = color::to_rgb(&p.text);
+    let allow_reset = matches!(&p.target, PickerTarget::Item(_));
+    let note = match color::form(&p.text) {
+        color::Form::Malformed => "色として解釈できません".to_string(),
+        color::Form::Name if !allow_reset => "行のスタイルは #rgb / #rrggbb のみ受け付けます".into(),
+        color::Form::Rgb if !allow_reset => "行のスタイルは #rgb / #rrggbb のみ受け付けます".into(),
+        color::Form::Name => "名前付き色（herdr は検証しません）".into(),
+        _ => String::new(),
+    };
+
+    app.set_picker_open(true);
+    app.set_picker_title(
+        match &p.target {
+            PickerTarget::Item(path) => path.clone(),
+            PickerTarget::RowFg(path, r, i) => format!("{path} — {} 行目 {} 番目 の fg", r + 1, i + 1),
+        }
+        .into(),
+    );
+    app.set_picker_hue_color(slint::Color::from_rgb_u8(hr, hg, hb));
+    app.set_picker_current(
+        preview
+            .map(|(r, g, b)| slint::Color::from_rgb_u8(r, g, b))
+            .unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
+    );
+    app.set_picker_hex(p.text.clone().into());
+    app.set_picker_note(note.into());
+    app.set_picker_hue(p.hue);
+    app.set_picker_sat(p.sat);
+    app.set_picker_val(p.val);
+    app.set_picker_allow_reset(allow_reset);
+    app.set_picker_presets(ModelRc::new(VecModel::from(
+        PRESETS
+            .iter()
+            .filter_map(|h| color::parse_hex(h))
+            .map(|(r, g, b)| slint::Color::from_rgb_u8(r, g, b))
+            .collect::<Vec<_>>(),
+    )));
+}
+
 fn section_title(state: &State) -> String {
     match state.schema.sections.get(state.selected) {
         Some(s) if s.array_of_tables => format!("[[{}]]", s.name),
@@ -269,6 +409,7 @@ fn refresh(app: &App, state: &State) {
     app.set_selected(state.selected as i32);
     app.set_dirty_count(state.dirty_count() as i32);
     app.set_allowed_tokens(allowed_tokens(state));
+    refresh_picker(app, state);
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -292,6 +433,7 @@ fn main() -> Result<(), slint::PlatformError> {
         saved: cfg.values.into_iter().collect(),
         edits: BTreeMap::new(),
         selected: 0,
+        picker: None,
     }));
 
     let app = App::new()?;
@@ -420,12 +562,90 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
     {
+        let state = state.clone();
         let weak = app.as_weak();
         app.on_swatch_clicked(move |path| {
-            // A real picker is the next thing to build; this proves the
-            // swatch renders and is clickable.
-            weak.unwrap()
-                .set_result(format!("カラーピッカー未実装: {path}").into());
+            state
+                .borrow_mut()
+                .open_picker(PickerTarget::Item(path.to_string()));
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_rows_open_fg(move |path, row, index| {
+            state.borrow_mut().open_picker(PickerTarget::RowFg(
+                path.to_string(),
+                row.max(0) as usize,
+                index.max(0) as usize,
+            ));
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_picker_pick_sv(move |sat, val| {
+            let hue = state.borrow().picker.as_ref().map_or(0.0, |p| p.hue);
+            state.borrow_mut().picker_hsv(hue, sat, val);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_picker_pick_hue(move |hue| {
+            let (sat, val) = state
+                .borrow()
+                .picker
+                .as_ref()
+                .map_or((1.0, 1.0), |p| (p.sat, p.val));
+            state.borrow_mut().picker_hsv(hue, sat, val);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_picker_set_hex(move |text| {
+            state.borrow_mut().picker_text(text.to_string());
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_picker_preset(move |index| {
+            if let Some(hex) = PRESETS.get(index.max(0) as usize) {
+                state.borrow_mut().picker_text((*hex).to_string());
+            }
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_picker_reset(move || {
+            // herdr's own escape hatch: `panel_bg = "reset"`.
+            state.borrow_mut().picker_text("reset".into());
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_picker_close(move || {
+            state.borrow_mut().picker = None;
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
         });
     }
     {
@@ -524,6 +744,31 @@ fn main() -> Result<(), slint::PlatformError> {
                 println!("  再生成       : {}", rows::to_toml(&parsed));
             }
         }
+        // Drive the picker without a window: open it on a real colour
+        // setting, move it, and read back what would be written.
+        drop(s);
+        {
+            let mut st = state.borrow_mut();
+            st.open_picker(PickerTarget::Item("theme.custom.accent".into()));
+            let p = st.picker.clone().unwrap();
+            println!(
+                "picker 初期    : text={} hue={:.3} sat={:.3} val={:.3}",
+                p.text, p.hue, p.sat, p.val
+            );
+            st.picker_hsv(0.5, 1.0, 1.0);
+            println!("HSV(0.5,1,1)  : {}", st.picker.as_ref().unwrap().text);
+            println!("  書き込み値   : {:?}", st.effective("theme.custom.accent"));
+            st.picker_text("cyan".into());
+            println!("テキスト cyan  : hue={:.3} 書き込み値={:?}",
+                st.picker.as_ref().unwrap().hue, st.effective("theme.custom.accent"));
+            st.picker_text("reset".into());
+            println!("reset          : {:?}", st.effective("theme.custom.accent"));
+
+            st.open_picker(PickerTarget::RowFg("ui.sidebar.agents.rows".into(), 0, 0));
+            st.picker_hsv(0.0, 1.0, 1.0);
+            println!("行 fg          : {:?}", st.effective("ui.sidebar.agents.rows"));
+        }
+        let s = state.borrow();
         let colors = s
             .schema
             .sections
@@ -532,6 +777,31 @@ fn main() -> Result<(), slint::PlatformError> {
             .filter(|i| i.color)
             .count();
         println!("color 項目    : {colors}");
+        return Ok(());
+    }
+
+    if std::env::var_os("PROTO_TRACE").is_some() {
+        // Report what the window actually is, from inside the event loop.
+        let weak = app.as_weak();
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(1500),
+            move || {
+                let app = weak.unwrap();
+                let w = app.window();
+                let size = w.size();
+                println!(
+                    "window: {}x{} visible={} scale={}",
+                    size.width,
+                    size.height,
+                    w.is_visible(),
+                    w.scale_factor()
+                );
+                slint::quit_event_loop().ok();
+            },
+        );
+        app.run()?;
         return Ok(());
     }
 

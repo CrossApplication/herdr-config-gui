@@ -40,7 +40,29 @@ PROTO_DUMP=1 cargo run           # ウィンドウを開かずデータだけ確
 | セクションサイドバーと件数 | 再現できた |
 | **入れ子リスト（行 × トークン）** | Slint の struct は配列フィールドを持てる。`struct RowEntry { tokens: [TokenCell] }` と `for r in rows: for t in r.tokens:` で表現できた |
 | ホバー | CSS の `:hover` はなく、`TouchArea` + `has-hover` を明示的に書く |
-| カラーピッカー | **標準ウィジェットがない。未実装** |
+| カラーピッカー | 標準ウィジェットはないが**自作できた**（下記） |
+
+## カラーピッカー
+
+Slint に標準ウィジェットがないため自作した。構成は次のとおり。
+
+- **SV 平面** — 色相色の矩形に、左から白、下から黒を `@linear-gradient` で重ねる。
+  2 枚のグラデーションで彩度・明度平面になる
+- **色相帯** — 7 ストップの線形グラデーション
+- **十字カーソル / つまみ** — 現在値の位置に描画
+- **hex 入力** — 名前付き色や `rgb()` や `reset` も打てるよう自由入力のまま
+- **プリセット** — アプリ自身のパレット 12 色
+
+`TouchArea` の `mouse-x` / `mouse-y` を 0〜1 に正規化して Rust へ渡し、
+HSV ↔ RGB の変換は Rust 側（`src/color.rs`）で行う。Slint 側に計算を持たせていない。
+
+herdr は `[theme.custom]` の色を一切検証しない（`accent = "notacolor"` は
+`config check` を通って黙って無視される）一方、行スタイルの `fg` は
+`#rgb` / `#rrggbb` しか受け付けない。ピッカーは常に hex を生成するのでどちらでも有効で、
+文字入力で他の記法も使えるようにしてある。
+
+行エディタの `fg` スウォッチからも同じピッカーを開く。書き戻し先は
+`PickerTarget::Item` と `PickerTarget::RowFg` で切り替える。
 
 ## 行エディタについて
 

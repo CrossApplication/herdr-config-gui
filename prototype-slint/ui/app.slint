@@ -119,6 +119,7 @@ component TokenLine inherits Rectangle {
     callback act(string, int, int, int);
     callback set-token(int, int, string);
     callback set-flag(int, int, string, bool);
+    callback open-fg(int, int);
 
     height: 30px;
     HorizontalLayout {
@@ -144,9 +145,13 @@ component TokenLine inherits Rectangle {
             height: 20px;
             border-radius: 4px;
             border-width: 1px;
-            border-color: Palette.line;
+            border-color: fgTouch.has-hover ? Palette.accent : Palette.line;
             background: cell.has-fg ? cell.fg : Palette.row;
             opacity: cell.has-fg ? 1.0 : 0.3;
+            fgTouch := TouchArea {
+                enabled: cell.has-fg;
+                clicked => { root.open-fg(row-index, index); }
+            }
         }
 
         CheckBox {
@@ -183,6 +188,7 @@ component RowsEditor inherits VerticalLayout {
     callback act(string, int, int, int);
     callback set-token(int, int, string);
     callback set-flag(int, int, string, bool);
+    callback open-fg(int, int);
 
     spacing: 8px;
 
@@ -242,6 +248,7 @@ component RowsEditor inherits VerticalLayout {
                 act(a, rr, ii, d) => { root.act(a, rr, ii, d); }
                 set-token(rr, ii, v) => { root.set-token(rr, ii, v); }
                 set-flag(rr, ii, f, on) => { root.set-flag(rr, ii, f, on); }
+                open-fg(rr, ii) => { root.open-fg(rr, ii); }
             }
 
             GhostButton {
@@ -259,6 +266,191 @@ component RowsEditor inherits VerticalLayout {
     }
 }
 
+// Saturation / value square: a hue-coloured base with white fading in from
+// the left and black fading in from the bottom, which is how an SV plane is
+// built out of two linear gradients.
+component SvPlane inherits Rectangle {
+    in property <color> hue-color;
+    in property <float> sat;
+    in property <float> val;
+    callback picked(float, float);
+
+    background: hue-color;
+    border-radius: 6px;
+    clip: true;
+
+    Rectangle {
+        background: @linear-gradient(90deg, #ffffff 0%, #ffffff00 100%);
+    }
+    Rectangle {
+        background: @linear-gradient(180deg, #00000000 0%, #000000 100%);
+    }
+
+    // The crosshair sits where the current colour is.
+    Rectangle {
+        x: root.sat * root.width - 6px;
+        y: (1.0 - root.val) * root.height - 6px;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        border-width: 2px;
+        border-color: #ffffff;
+        background: transparent;
+    }
+
+    touch := TouchArea {
+        clicked => { root.picked(touch.mouse-x / root.width, 1.0 - touch.mouse-y / root.height); }
+        moved => {
+            if (touch.pressed) {
+                root.picked(touch.mouse-x / root.width, 1.0 - touch.mouse-y / root.height);
+            }
+        }
+    }
+}
+
+component HueStrip inherits Rectangle {
+    in property <float> hue;
+    callback picked(float);
+
+    height: 18px;
+    border-radius: 5px;
+    clip: true;
+    background: @linear-gradient(90deg,
+        #ff0000 0%, #ffff00 16.7%, #00ff00 33.3%,
+        #00ffff 50%, #0000ff 66.7%, #ff00ff 83.3%, #ff0000 100%);
+
+    Rectangle {
+        x: root.hue * root.width - 2px;
+        width: 4px;
+        height: parent.height;
+        border-radius: 2px;
+        border-width: 1px;
+        border-color: #ffffff;
+        background: #00000040;
+    }
+
+    touch := TouchArea {
+        clicked => { root.picked(touch.mouse-x / root.width); }
+        moved => { if (touch.pressed) { root.picked(touch.mouse-x / root.width); } }
+    }
+}
+
+// The picker itself, shown as a modal over the whole window.
+component ColorPicker inherits Rectangle {
+    in property <string> title;
+    in property <color> hue-color;
+    in property <color> current;
+    in property <string> hex;
+    in property <string> note;
+    in property <float> hue;
+    in property <float> sat;
+    in property <float> val;
+    in property <[color]> presets;
+    in property <bool> allow-reset;
+    callback pick-sv(float, float);
+    callback pick-hue(float);
+    callback set-hex(string);
+    callback pick-preset(int);
+    callback do-reset();
+    callback close();
+
+    background: #11111bb8;
+
+    // Clicking the backdrop dismisses, so the panel swallows its own clicks.
+    TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: 340px;
+        height: panel.preferred-height + 32px;
+        background: Palette.panel;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 10px;
+        TouchArea { }
+
+        panel := VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text: root.title;
+                color: Palette.accent;
+                font-family: "Menlo";
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            SvPlane {
+                height: 150px;
+                hue-color: root.hue-color;
+                sat: root.sat;
+                val: root.val;
+                picked(s, v) => { root.pick-sv(s, v); }
+            }
+
+            HueStrip {
+                hue: root.hue;
+                picked(h) => { root.pick-hue(h); }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 38px;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Palette.line;
+                    background: root.current;
+                }
+                LineEdit {
+                    text: root.hex;
+                    placeholder-text: "#89b4fa / cyan / rgb(1,2,3)";
+                    edited(v) => { root.set-hex(v); }
+                }
+            }
+
+            if root.note != "": Text {
+                text: root.note;
+                color: Palette.warn;
+                font-size: 11px;
+            }
+
+            Text {
+                text: "テーマの色";
+                color: Palette.dim;
+                font-size: 11px;
+            }
+            HorizontalLayout {
+                spacing: 5px;
+                for p[pi] in root.presets: Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: pt.has-hover ? Palette.accent : Palette.line;
+                    background: p;
+                    pt := TouchArea { clicked => { root.pick-preset(pi); } }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                if root.allow-reset: GhostButton {
+                    label: "reset にする";
+                    tone: Palette.warn;
+                    clicked => { root.do-reset(); }
+                }
+                Rectangle { }
+                GhostButton {
+                    label: "閉じる";
+                    tone: Palette.accent;
+                    clicked => { root.close(); }
+                }
+            }
+        }
+    }
+}
+
 // One setting. The 3px bar on the left is the state marker.
 component SettingRow inherits Rectangle {
     in property <ItemRow> item;
@@ -268,6 +460,7 @@ component SettingRow inherits Rectangle {
     callback rows-act(string, string, int, int, int);
     callback rows-set-token(string, int, int, string);
     callback rows-set-flag(string, int, int, string, bool);
+    callback rows-open-fg(string, int, int);
 
     height: layout.preferred-height + 16px;
     background: item.is-dirty ? #89b4fa14 : transparent;
@@ -362,6 +555,7 @@ component SettingRow inherits Rectangle {
             act(a, r, i, d) => { root.rows-act(item.path, a, r, i, d); }
             set-token(r, i, v) => { root.rows-set-token(item.path, r, i, v); }
             set-flag(r, i, f, on) => { root.rows-set-flag(item.path, r, i, f, on); }
+            open-fg(r, i) => { root.rows-open-fg(item.path, r, i); }
         }
     }
 
@@ -387,13 +581,31 @@ export component App inherits Window {
     in property <string> result;
     in property <bool> show-about: false;
     in property <[string]> allowed-tokens;
+    in property <bool> picker-open: false;
+    in property <string> picker-title;
+    in property <color> picker-hue-color;
+    in property <color> picker-current;
+    in property <string> picker-hex;
+    in property <string> picker-note;
+    in property <float> picker-hue;
+    in property <float> picker-sat;
+    in property <float> picker-val;
+    in property <[color]> picker-presets;
+    in property <bool> picker-allow-reset;
 
+    callback picker-pick-sv(float, float);
+    callback picker-pick-hue(float);
+    callback picker-set-hex(string);
+    callback picker-preset(int);
+    callback picker-reset();
+    callback picker-close();
     callback select-section(int);
     callback edited(string, string);
     callback swatch-clicked(string);
     callback rows-act(string, string, int, int, int);
     callback rows-set-token(string, int, int, string);
     callback rows-set-flag(string, int, int, string, bool);
+    callback rows-open-fg(string, int, int);
     callback preview();
     callback revert();
     callback toggle-about();
@@ -511,6 +723,7 @@ export component App inherits Window {
                         rows-act(p, a, r, i, d) => { root.rows-act(p, a, r, i, d); }
                         rows-set-token(p, r, i, v) => { root.rows-set-token(p, r, i, v); }
                         rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
+                        rows-open-fg(p, r, i) => { root.rows-open-fg(p, r, i); }
                     }
                 }
             }
@@ -550,5 +763,25 @@ export component App inherits Window {
                 }
             }
         }
+    }
+
+    // Painted last so it covers the whole window.
+    if picker-open: ColorPicker {
+        title: picker-title;
+        hue-color: picker-hue-color;
+        current: picker-current;
+        hex: picker-hex;
+        note: picker-note;
+        hue: picker-hue;
+        sat: picker-sat;
+        val: picker-val;
+        presets: picker-presets;
+        allow-reset: picker-allow-reset;
+        pick-sv(sv, vv) => { root.picker-pick-sv(sv, vv); }
+        pick-hue(h) => { root.picker-pick-hue(h); }
+        set-hex(v) => { root.picker-set-hex(v); }
+        pick-preset(i) => { root.picker-preset(i); }
+        do-reset() => { root.picker-reset(); }
+        close() => { root.picker-close(); }
     }
 }
