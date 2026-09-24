@@ -1,0 +1,343 @@
+// Slint rendering of the current UI, for comparison with the Tauri build.
+// The palette is the shipping app's CSS custom properties, verbatim.
+
+import { Button, LineEdit, CheckBox, ComboBox, ScrollView, AboutSlint } from "std-widgets.slint";
+
+export global Palette {
+    out property <color> bg: #11111b;
+    out property <color> panel: #181825;
+    out property <color> row: #1e1e2e;
+    out property <color> line: #313244;
+    out property <color> text: #cdd6f4;
+    out property <color> dim: #7f849c;
+    out property <color> faint: #45475a;
+    out property <color> accent: #89b4fa;
+    out property <color> set: #a6e3a1;
+    out property <color> warn: #f9e2af;
+    out property <color> red: #f38ba8;
+}
+
+export struct SectionRow {
+    name: string,
+    total: int,
+    set-count: int,
+}
+
+export struct ItemRow {
+    path: string,
+    key: string,
+    doc: string,
+    // "text" | "bool" | "int" | "color"
+    kind: string,
+    // Current value as display text; empty means inheriting the default.
+    value: string,
+    default-text: string,
+    is-set: bool,
+    is-dirty: bool,
+    swatch: color,
+    has-swatch: bool,
+}
+
+// A chip: the three-state marker from the shipping UI.
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <color> tone: Palette.dim;
+    border-color: tone;
+    border-width: 1px;
+    border-radius: 9px;
+    height: 18px;
+    width: 64px;
+    Text {
+        text: label;
+        color: tone;
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component GhostButton inherits Rectangle {
+    in property <string> label;
+    in property <color> tone: Palette.dim;
+    callback clicked();
+    border-color: touch.has-hover ? tone : Palette.line;
+    border-width: 1px;
+    border-radius: 5px;
+    height: 22px;
+    width: txt.preferred-width + 16px;
+    Text {
+        x: 8px;
+        text: root.label;
+        color: root.tone;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    txt := Text { text: root.label; font-size: 11px; visible: false; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// One setting. The 3px bar on the left is the state marker.
+component SettingRow inherits Rectangle {
+    in property <ItemRow> item;
+    callback edited(string, string);
+    callback swatch-clicked(string);
+
+    height: layout.preferred-height + 16px;
+    background: item.is-dirty ? #89b4fa14 : transparent;
+
+    Rectangle {
+        x: 0;
+        width: 3px;
+        border-radius: 2px;
+        background: item.is-dirty ? Palette.accent
+            : item.is-set ? Palette.set : transparent;
+    }
+
+    layout := VerticalLayout {
+        x: 12px;
+        y: 8px;
+        width: parent.width - 20px;
+        spacing: 5px;
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+
+            Text {
+                text: item.key;
+                color: Palette.text;
+                font-family: "Menlo";
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+                width: 220px;
+                overflow: elide;
+            }
+
+            Chip {
+                label: item.is-dirty ? "未保存" : item.is-set ? "設定済み" : "既定";
+                tone: item.is-dirty ? Palette.accent : item.is-set ? Palette.set : Palette.dim;
+            }
+
+            if item.kind == "color": Rectangle {
+                width: 34px;
+                height: 24px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Palette.line;
+                background: item.has-swatch ? item.swatch : Palette.row;
+                TouchArea { clicked => { root.swatch-clicked(item.path); } }
+            }
+
+            if item.kind == "bool": ComboBox {
+                model: ["既定 (" + item.default-text + ")", "true", "false"];
+                current-value: item.value == "" ? "既定 (" + item.default-text + ")" : item.value;
+                width: 190px;
+                selected(v) => { root.edited(item.path, v == "true" || v == "false" ? v : ""); }
+            }
+
+            if item.kind != "bool": LineEdit {
+                text: item.value;
+                placeholder-text: item.default-text == "" ? "(未設定)" : item.default-text;
+                width: 240px;
+                edited(v) => { root.edited(item.path, v); }
+            }
+
+            Text {
+                text: "既定 " + item.default-text;
+                color: Palette.faint;
+                font-size: 11px;
+                font-family: "Menlo";
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        if item.doc != "": Text {
+            text: item.doc;
+            color: Palette.dim;
+            font-size: 12px;
+            wrap: word-wrap;
+            width: parent.width;
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Palette.line;
+    }
+}
+
+export component App inherits Window {
+    title: "herdr Config (Slint 試作)";
+    preferred-width: 1180px;
+    preferred-height: 820px;
+    background: Palette.bg;
+
+    in property <[SectionRow]> sections;
+    in property <[ItemRow]> items;
+    in property <string> meta;
+    in property <string> section-title;
+    in property <int> selected: 0;
+    in property <int> dirty-count: 0;
+    in property <string> result;
+    in property <bool> show-about: false;
+
+    callback select-section(int);
+    callback edited(string, string);
+    callback swatch-clicked(string);
+    callback preview();
+    callback revert();
+    callback toggle-about();
+
+    VerticalLayout {
+        // ---- top bar ----
+        Rectangle {
+            height: 44px;
+            background: Palette.panel;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 12px;
+                Text {
+                    text: "herdr Config";
+                    color: Palette.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: meta;
+                    color: Palette.dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                GhostButton {
+                    label: show-about ? "設定に戻る" : "About";
+                    tone: Palette.accent;
+                    clicked => { toggle-about(); }
+                }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.line; }
+        }
+
+        if show-about: VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            alignment: start;
+            Text {
+                text: "herdr Config 0.1.0";
+                color: Palette.text;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            Text {
+                text: "Copyright (c) 2026 Members Co., Ltd  All rights reserved.\nBSD-3-Clause";
+                color: Palette.dim;
+                font-size: 12px;
+            }
+            // Required by the Slint royalty-free licence.
+            AboutSlint { }
+        }
+
+        if !show-about: HorizontalLayout {
+            // ---- sidebar ----
+            Rectangle {
+                width: 250px;
+                background: Palette.panel;
+                ScrollView {
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 1px;
+                        alignment: start;
+                        for s[i] in sections: Rectangle {
+                            height: 28px;
+                            border-radius: 5px;
+                            background: i == selected ? Palette.line
+                                : rowTouch.has-hover ? Palette.row : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                Text {
+                                    text: s.name == "" ? "(root)" : s.name;
+                                    color: i == selected ? Palette.accent : Palette.text;
+                                    font-family: "Menlo";
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: s.set-count > 0 ? s.set-count + "/" + s.total : s.total;
+                                    color: s.set-count > 0 ? Palette.set : Palette.faint;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                            rowTouch := TouchArea { clicked => { select-section(i); } }
+                        }
+                    }
+                }
+                Rectangle { x: parent.width - 1px; width: 1px; background: Palette.line; }
+            }
+
+            // ---- items ----
+            ScrollView {
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 0px;
+                    alignment: start;
+                    Text {
+                        text: section-title;
+                        color: Palette.accent;
+                        font-family: "Menlo";
+                        font-size: 14px;
+                    }
+                    for it in items: SettingRow {
+                        item: it;
+                        edited(p, v) => { root.edited(p, v); }
+                        swatch-clicked(p) => { root.swatch-clicked(p); }
+                    }
+                }
+            }
+        }
+
+        // ---- save bar ----
+        Rectangle {
+            height: 46px;
+            background: Palette.panel;
+            Rectangle { height: 1px; background: Palette.line; }
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 10px;
+                Text {
+                    text: dirty-count > 0 ? dirty-count + " 件の変更" : "変更なし";
+                    color: dirty-count > 0 ? Palette.accent : Palette.dim;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    width: 90px;
+                }
+                GhostButton {
+                    label: "すべて取り消し";
+                    clicked => { revert(); }
+                }
+                GhostButton {
+                    label: "差分を確認";
+                    tone: Palette.accent;
+                    clicked => { preview(); }
+                }
+                Text {
+                    text: result;
+                    color: Palette.dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}

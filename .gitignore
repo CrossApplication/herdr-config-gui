@@ -13,3 +13,6 @@ src-tauri/gen/
 
 # bundled test output
 .test-build/
+
+# Slint prototype build output
+prototype-slint/target/
