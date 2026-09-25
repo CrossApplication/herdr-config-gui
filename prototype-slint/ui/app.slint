@@ -52,6 +52,8 @@ export struct ItemRow {
     // Only populated when kind == "rows".
     rows: [RowEntry],
     is-binding: bool,
+    /// The key on its own, or the dotted path while filtering.
+    label: string,
 }
 
 // A chip: the three-state marker from the shipping UI.
@@ -642,7 +644,9 @@ component SettingRow inherits Rectangle {
             alignment: start;
 
             Text {
-                text: item.key;
+                // While filtering, hits come from every section, so the key
+                // alone would not say where each one lives.
+                text: item.label;
                 color: Palette.text;
                 font-family: "Menlo";
                 font-size: 13px;
@@ -740,6 +744,7 @@ export component App inherits Window {
     in property <[ItemRow]> items;
     in property <string> meta;
     in property <string> section-title;
+    in property <string> filter;
     in property <int> selected: 0;
     in property <int> dirty-count: 0;
     in property <string> result;
@@ -770,6 +775,7 @@ export component App inherits Window {
     callback picker-preset(int);
     callback picker-reset();
     callback picker-close();
+    callback filter-changed(string);
     callback select-section(int);
     callback edited(string, string);
     callback swatch-clicked(string);
@@ -802,6 +808,12 @@ export component App inherits Window {
                     font-size: 14px;
                     font-weight: 700;
                     vertical-alignment: center;
+                }
+                LineEdit {
+                    placeholder-text: "設定を検索（キー名・説明文）";
+                    text: root.filter;
+                    width: 250px;
+                    edited(v) => { root.filter-changed(v); }
                 }
                 Text {
                     text: meta;

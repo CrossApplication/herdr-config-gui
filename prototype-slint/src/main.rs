@@ -85,6 +85,8 @@ struct State {
     /// Touched settings; `None` means "back to the default".
     edits: BTreeMap<String, Option<String>>,
     selected: usize,
+    /// Free-text filter across every section; empty shows one section.
+    filter: String,
     picker: Option<Picker>,
     capture: Option<Capture>,
 }
@@ -339,13 +341,34 @@ fn section_rows(state: &State) -> ModelRc<SectionRow> {
     ModelRc::new(VecModel::from(rows))
 }
 
-fn item_rows(state: &State) -> ModelRc<ItemRow> {
-    let Some(section) = state.schema.sections.get(state.selected) else {
-        return ModelRc::new(VecModel::from(Vec::<ItemRow>::new()));
-    };
-    let rows: Vec<ItemRow> = section
-        .items
+/// Items to show: one section, or every match while filtering.
+fn visible_items(state: &State) -> Vec<&schema::Item> {
+    let needle = state.filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return state
+            .schema
+            .sections
+            .get(state.selected)
+            .map(|s| s.items.iter().collect())
+            .unwrap_or_default();
+    }
+    state
+        .schema
+        .sections
         .iter()
+        .flat_map(|s| s.items.iter())
+        .filter(|i| {
+            i.path.to_lowercase().contains(&needle)
+                || i.doc.join(" ").to_lowercase().contains(&needle)
+                || i.trailing.to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+fn item_rows(state: &State) -> ModelRc<ItemRow> {
+    let filtering = !state.filter.trim().is_empty();
+    let rows: Vec<ItemRow> = visible_items(state)
+        .into_iter()
         .map(|item| {
             let value = state.effective(&item.path);
             let swatch = value
@@ -371,6 +394,14 @@ fn item_rows(state: &State) -> ModelRc<ItemRow> {
                 has_swatch: swatch.is_some(),
                 rows: row_entries(state, item),
                 is_binding: item.binding_kind.is_some(),
+                // A hit can come from any section, so the key alone would not
+                // say where it lives.
+                label: if filtering {
+                    item.path.clone()
+                } else {
+                    item.key.clone()
+                }
+                .into(),
             }
         })
         .collect();
@@ -466,6 +497,10 @@ fn refresh_capture(app: &App, state: &State) {
 }
 
 fn section_title(state: &State) -> String {
+    let needle = state.filter.trim();
+    if !needle.is_empty() {
+        return format!("検索: \"{needle}\" — {} 件", visible_items(state).len());
+    }
     match state.schema.sections.get(state.selected) {
         Some(s) if s.array_of_tables => format!("[[{}]]", s.name),
         Some(s) if s.name.is_empty() => "(root)".into(),
@@ -481,6 +516,7 @@ fn refresh(app: &App, state: &State) {
     app.set_selected(state.selected as i32);
     app.set_dirty_count(state.dirty_count() as i32);
     app.set_allowed_tokens(allowed_tokens(state));
+    app.set_filter(state.filter.clone().into());
     refresh_picker(app, state);
     refresh_capture(app, state);
 }
@@ -506,6 +542,7 @@ fn main() -> Result<(), slint::PlatformError> {
         saved: cfg.values.into_iter().collect(),
         edits: BTreeMap::new(),
         selected: 0,
+        filter: String::new(),
         picker: None,
         capture: None,
     }));
@@ -533,8 +570,21 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let state = state.clone();
         let weak = app.as_weak();
+        app.on_filter_changed(move |text| {
+            state.borrow_mut().filter = text.to_string();
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
         app.on_select_section(move |index| {
-            state.borrow_mut().selected = index.max(0) as usize;
+            let mut s = state.borrow_mut();
+            s.selected = index.max(0) as usize;
+            // Picking a section is also how you leave a search.
+            s.filter.clear();
+            drop(s);
             let app = weak.unwrap();
             refresh(&app, &state.borrow());
         });
