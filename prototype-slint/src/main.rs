@@ -99,6 +99,7 @@ struct State {
     filter: String,
     picker: Option<Picker>,
     capture: Option<Capture>,
+    problems_open: bool,
 }
 
 impl State {
@@ -232,6 +233,28 @@ impl State {
             }
         }
         self.commit_picker();
+    }
+
+    /// Every binding in the effective config, defaults included, which is
+    /// what the user will actually be running.
+    fn bindings(&self) -> Vec<keys::Entry> {
+        self.schema
+            .sections
+            .iter()
+            .flat_map(|s| s.items.iter())
+            .filter_map(|i| {
+                i.binding_kind.map(|kind| keys::Entry {
+                    path: i.path.clone(),
+                    value: display(
+                        &self
+                            .effective(&i.path)
+                            .unwrap_or_else(|| i.default.clone()),
+                    ),
+                    kind: kind.to_string(),
+                    accepts_range: i.accepts_range,
+                })
+            })
+            .collect()
     }
 
     /// The prefix chord in effect, needed to fold `prefix+X`.
@@ -491,6 +514,66 @@ fn refresh_picker(app: &App, state: &State) {
     )));
 }
 
+const ADVICE: &[(&str, &str)] = &[
+    (
+        "invalid",
+        "herdr が受け付けない値です。別のキーに録音し直してください。",
+    ),
+    (
+        "conflict",
+        "同じキーに複数の動作が割り当たっているため、意図しない動作になります。どちらか一方を録音し直すか、無効にしてください。",
+    ),
+    (
+        "risky",
+        "外側の端末がこのキーを herdr まで届けない可能性があります。prefix+ を付けた形か ctrl+英字 / ファンクションキーが確実です。",
+    ),
+];
+
+fn refresh_problems(app: &App, state: &State) {
+    let found = keys::problems(&state.bindings());
+    let errors = keys::error_count(&found);
+    app.set_problem_errors(errors as i32);
+    app.set_problem_warnings((found.len() - errors) as i32);
+    app.set_problems_open(state.problems_open);
+
+    let label = |kind: &str| match kind {
+        "invalid" => "構文エラー",
+        "conflict" => "キー衝突",
+        _ => "端末依存",
+    };
+    let rows: Vec<ProblemRow> = found
+        .iter()
+        .map(|p| ProblemRow {
+            label: label(p.kind).into(),
+            severity: p.severity.into(),
+            chord: p.chord.clone().into(),
+            detail: p.detail.clone().into(),
+            advice: ADVICE
+                .iter()
+                .find(|(k, _)| *k == p.kind)
+                .map(|(_, a)| *a)
+                .unwrap_or("")
+                .into(),
+            scope: p.scope.unwrap_or("").into(),
+            entries: ModelRc::new(VecModel::from(
+                p.paths
+                    .iter()
+                    .map(|path| ProblemEntry {
+                        path: path.clone().into(),
+                        value: state
+                            .effective(path)
+                            .map(|v| display(&v))
+                            .unwrap_or_default()
+                            .into(),
+                        state: state.state_label(path).into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        })
+        .collect();
+    app.set_problems(ModelRc::new(VecModel::from(rows)));
+}
+
 fn refresh_capture(app: &App, state: &State) {
     let Some(c) = &state.capture else {
         app.set_capture_open(false);
@@ -514,8 +597,8 @@ fn refresh_capture(app: &App, state: &State) {
     let (level, note) = if c.chord.is_empty() {
         ("", String::new())
     } else {
-        let (lvl, reason) = keys::risk(&c.chord, &c.kind);
-        (lvl, reason.to_string())
+        let r = keys::risk(&c.chord, &c.kind);
+        (r.level, r.reason.to_string())
     };
 
     app.set_capture_open(true);
@@ -557,6 +640,7 @@ fn refresh(app: &App, state: &State) {
     app.set_filter(state.filter.clone().into());
     refresh_picker(app, state);
     refresh_capture(app, state);
+    refresh_problems(app, state);
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -583,6 +667,7 @@ fn main() -> Result<(), slint::PlatformError> {
         filter: String::new(),
         picker: None,
         capture: None,
+        problems_open: false,
     }));
 
     // Must be selected before any window exists.
@@ -758,6 +843,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = app.as_weak();
         app.on_record(move |path| {
             let mut s = state.borrow_mut();
+            s.problems_open = false;
             let kind = s
                 .item(&path)
                 .and_then(|i| i.binding_kind)
@@ -987,6 +1073,37 @@ fn main() -> Result<(), slint::PlatformError> {
             let app = weak.unwrap();
             refresh(&app, &state.borrow());
             app.set_result("取り消しました".into());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_open_problems(move || {
+            state.borrow_mut().problems_open = true;
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_close_problems(move || {
+            state.borrow_mut().problems_open = false;
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_problem_goto(move |path| {
+            let mut s = state.borrow_mut();
+            // Jumping to a setting is also how you leave the panel.
+            s.problems_open = false;
+            s.filter = path.to_string();
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
         });
     }
     {

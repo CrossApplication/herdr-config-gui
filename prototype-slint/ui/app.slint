@@ -36,6 +36,23 @@ export struct RowEntry {
     preview: string,
 }
 
+export struct ProblemEntry {
+    path: string,
+    value: string,
+    state: string,
+}
+
+export struct ProblemRow {
+    // `構文エラー` / `キー衝突` / `端末依存`
+    label: string,
+    severity: string,
+    chord: string,
+    detail: string,
+    advice: string,
+    scope: string,
+    entries: [ProblemEntry],
+}
+
 export struct ItemRow {
     path: string,
     key: string,
@@ -458,6 +475,170 @@ component ColorPicker inherits Rectangle {
     }
 }
 
+// Everything wrong with the current keybindings, and what to do about each.
+component ProblemsPanel inherits Rectangle {
+    in property <[ProblemRow]> rows;
+    in property <int> errors;
+    in property <int> warnings;
+    callback goto(string);
+    callback record(string);
+    callback disable(string);
+    callback close();
+
+    background: #11111bb8;
+    TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: min(820px, parent.width - 32px);
+        height: min(parent.height - 60px, 720px);
+        background: Palette.panel;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 10px;
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: "キー設定の問題";
+                    color: Palette.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                if root.errors > 0: Chip { label: "エラー " + root.errors; tone: Palette.red; }
+                if root.warnings > 0: Chip { label: "警告 " + root.warnings; tone: Palette.warn; }
+                if root.errors == 0 && root.warnings == 0: Chip { label: "問題なし"; tone: Palette.set; }
+                Rectangle { }
+                GhostButton {
+                    label: "閉じる";
+                    tone: Palette.accent;
+                    clicked => { root.close(); }
+                }
+            }
+
+            if root.rows.length == 0: Text {
+                text: "キー設定に問題はありません。\n構文エラー・重複したキー・端末が届けにくいキーが見つかるとここに並びます。";
+                color: Palette.dim;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    for p in root.rows: Rectangle {
+                        background: #1e1e2e80;
+                        border-color: Palette.line;
+                        border-width: 1px;
+                        border-radius: 7px;
+                        height: card.preferred-height + 16px;
+
+                        Rectangle {
+                            x: 0;
+                            width: 3px;
+                            background: p.severity == "error" ? Palette.red : Palette.warn;
+                        }
+
+                        card := VerticalLayout {
+                            x: 12px;
+                            y: 8px;
+                            width: parent.width - 20px;
+                            spacing: 6px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Chip {
+                                    label: p.label;
+                                    tone: p.severity == "error" ? Palette.red : Palette.warn;
+                                }
+                                Text {
+                                    text: p.chord == "" ? "\"\"" : p.chord;
+                                    color: Palette.accent;
+                                    font-family: "Menlo";
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                if p.scope == "navigate": Text {
+                                    text: "navigate モード内";
+                                    color: Palette.dim;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: p.detail;
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            Text {
+                                text: p.advice;
+                                color: Palette.dim;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                                width: parent.width;
+                            }
+
+                            for e in p.entries: HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: e.path;
+                                    color: Palette.text;
+                                    font-family: "Menlo";
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: e.value == "" ? "\"\"" : e.value;
+                                    color: Palette.dim;
+                                    font-family: "Menlo";
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: e.state;
+                                    color: Palette.faint;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { }
+                                GhostButton {
+                                    label: "この設定へ移動";
+                                    clicked => { root.goto(e.path); }
+                                }
+                                GhostButton {
+                                    label: "キーを録音";
+                                    tone: Palette.accent;
+                                    clicked => { root.record(e.path); }
+                                }
+                                GhostButton {
+                                    label: "無効にする";
+                                    tone: Palette.warn;
+                                    clicked => { root.disable(e.path); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Key capture. Two phases, because Esc and Enter are themselves bindable:
 // while recording every keypress is swallowed and turned into a chord; once
 // captured, Esc cancels and Enter confirms.
@@ -796,6 +977,10 @@ export component App inherits Window {
     in property <string> capture-note;
     in property <string> capture-level;
     in property <bool> capture-recording: true;
+    in property <[ProblemRow]> problems;
+    in property <int> problem-errors;
+    in property <int> problem-warnings;
+    in property <bool> problems-open: false;
 
     callback picker-pick-sv(float, float);
     callback picker-pick-hue(float);
@@ -807,6 +992,9 @@ export component App inherits Window {
     callback resize-sidebar(length);
     callback reset-sidebar();
     callback filter-changed(string);
+    callback open-problems();
+    callback close-problems();
+    callback problem-goto(string);
     callback select-section(int);
     callback edited(string, string);
     callback swatch-clicked(string);
@@ -855,6 +1043,14 @@ export component App inherits Window {
                     font-size: 11px;
                     vertical-alignment: center;
                     overflow: elide;
+                }
+                GhostButton {
+                    label: problem-errors + problem-warnings > 0
+                        ? "キー設定の問題 " + (problem-errors + problem-warnings)
+                        : "キー設定の問題 なし";
+                    tone: problem-errors > 0 ? Palette.red
+                        : problem-warnings > 0 ? Palette.warn : Palette.dim;
+                    clicked => { open-problems(); }
                 }
                 GhostButton {
                     label: show-about ? "設定に戻る" : "About";
@@ -1013,6 +1209,16 @@ export component App inherits Window {
                 }
             }
         }
+    }
+
+    if problems-open: ProblemsPanel {
+        rows: problems;
+        errors: problem-errors;
+        warnings: problem-warnings;
+        goto(p) => { root.problem-goto(p); }
+        record(p) => { root.record(p); }
+        disable(p) => { root.disable-one(p); }
+        close() => { root.close-problems(); }
     }
 
     if capture-open: KeyCapture {
