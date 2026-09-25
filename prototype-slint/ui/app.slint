@@ -54,6 +54,10 @@ export struct ItemRow {
     is-binding: bool,
     /// The key on its own, or the dotted path while filtering.
     label: string,
+    /// `既定` / `設定済み` / `無効` / `未保存`.
+    state-label: string,
+    /// True when herdr documents `""` as this setting's off switch.
+    empty-disables: bool,
 }
 
 // A chip: the three-state marker from the shipping UI.
@@ -621,6 +625,8 @@ component SettingRow inherits Rectangle {
     callback rows-set-flag(string, int, int, string, bool);
     callback rows-open-fg(string, int, int);
     callback record(string);
+    callback revert-one(string);
+    callback disable-one(string);
 
     height: layout.preferred-height + 16px;
     background: item.is-dirty ? #89b4fa14 : transparent;
@@ -659,8 +665,10 @@ component SettingRow inherits Rectangle {
             }
 
             Chip {
-                label: item.is-dirty ? "未保存" : item.is-set ? "設定済み" : "既定";
-                tone: item.is-dirty ? Palette.accent : item.is-set ? Palette.set : Palette.dim;
+                label: item.state-label;
+                tone: item.is-dirty ? Palette.accent
+                    : item.state-label == "無効" ? Palette.warn
+                    : item.is-set ? Palette.set : Palette.dim;
             }
 
             if item.kind == "color": Rectangle {
@@ -701,6 +709,17 @@ component SettingRow inherits Rectangle {
                 label: "キーを録音";
                 tone: Palette.accent;
                 clicked => { root.record(item.path); }
+            }
+
+            if item.is-set: GhostButton {
+                label: "既定に戻す";
+                clicked => { root.revert-one(item.path); }
+            }
+
+            if item.empty-disables && item.state-label != "無効": GhostButton {
+                label: "無効にする";
+                tone: Palette.warn;
+                clicked => { root.disable-one(item.path); }
             }
 
             // Last in the row and the least important, so this is what
@@ -796,12 +815,15 @@ export component App inherits Window {
     callback rows-set-flag(string, int, int, string, bool);
     callback rows-open-fg(string, int, int);
     callback record(string);
+    callback revert-one(string);
+    callback disable-one(string);
     callback capture-pressed(string, bool, bool, bool, bool);
     callback capture-again();
     callback capture-confirm();
     callback capture-cancel();
     callback capture-clear();
     callback preview();
+    callback save();
     callback revert();
     callback toggle-about();
 
@@ -946,6 +968,8 @@ export component App inherits Window {
                         rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
                         rows-open-fg(p, r, i) => { root.rows-open-fg(p, r, i); }
                         record(p) => { root.record(p); }
+                        revert-one(p) => { root.revert-one(p); }
+                        disable-one(p) => { root.disable-one(p); }
                     }
                 }
             }
@@ -973,8 +997,12 @@ export component App inherits Window {
                 }
                 GhostButton {
                     label: "差分を確認";
-                    tone: Palette.accent;
                     clicked => { preview(); }
+                }
+                GhostButton {
+                    label: "保存して反映";
+                    tone: Palette.accent;
+                    clicked => { save(); }
                 }
                 Text {
                     text: result;

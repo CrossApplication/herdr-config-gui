@@ -109,6 +109,32 @@ impl State {
         }
     }
 
+    /// Three states, as in the shipping build: absent means the default is
+    /// inherited, `""` means herdr's own off switch, anything else is set.
+    fn state_label(&self, path: &str) -> &'static str {
+        if self.is_dirty(path) {
+            return "未保存";
+        }
+        match self.effective(path).as_deref() {
+            None => "既定",
+            Some("\"\"") => "無効",
+            Some(_) => "設定済み",
+        }
+    }
+
+    /// Everything a save would send.
+    fn edits(&self) -> Vec<config::Edit> {
+        self.edits
+            .iter()
+            .filter(|(p, _)| self.is_dirty(p))
+            .map(|(path, value)| config::Edit {
+                path: path.clone(),
+                value: value.clone(),
+                op: config::Op::Set,
+            })
+            .collect()
+    }
+
     fn is_dirty(&self, path: &str) -> bool {
         match self.edits.get(path) {
             Some(v) => v.as_deref() != self.saved.get(path).map(|s| s.as_str()),
@@ -412,6 +438,8 @@ fn item_rows(state: &State) -> ModelRc<ItemRow> {
                     item.key.clone()
                 }
                 .into(),
+                state_label: state.state_label(&item.path).into(),
+                empty_disables: item.empty_disables,
             }
         })
         .collect();
@@ -565,7 +593,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let app = App::new()?;
     app.set_meta(meta.into());
-    app.set_result("書き込みは行いません（試作のため読み取り専用）".into());
+    app.set_result("".into());
     refresh(&app, &state.borrow());
 
     let types: BTreeMap<String, String> = state
@@ -958,18 +986,77 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let state = state.clone();
         let weak = app.as_weak();
+        app.on_revert_one(move |path| {
+            state.borrow_mut().set(&path, None);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_disable_one(move |path| {
+            // herdr's own way of turning a setting off.
+            state.borrow_mut().set(&path, Some("\"\"".into()));
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_save(move || {
+            let edits = state.borrow().edits();
+            let app = weak.unwrap();
+            if edits.is_empty() {
+                app.set_result("変更はありません".into());
+                return;
+            }
+            // The shared writer: backup, minimal diff, pre-flight check, then
+            // reload. Fatal content never reaches disk.
+            let text = match config::save(edits, true) {
+                Err(e) => format!("保存に失敗しました: {e}"),
+                Ok(r) if !r.written => format!(
+                    "保存を中止しました（編集内容は残っています）: {}",
+                    r.check.raw.replace('\n', " ")
+                ),
+                Ok(r) => {
+                    let changed = r
+                        .changes
+                        .iter()
+                        .filter(|c| c.action != "noop")
+                        .map(|c| format!("{} {}", c.action, c.path))
+                        .collect::<Vec<_>>()
+                        .join(" / ");
+                    let reload = match r.reloaded {
+                        Some(true) => "reload: ok".to_string(),
+                        Some(false) => format!("reload: {}", r.reload_output),
+                        None => String::new(),
+                    };
+                    let backup = r
+                        .backup
+                        .map(|b| format!("  backup: {b}"))
+                        .unwrap_or_default();
+                    format!("{changed}  |  {reload}{backup}")
+                }
+            };
+
+            // Re-read, so what the form shows is what is on disk.
+            let mut s = state.borrow_mut();
+            let cfg = config::load();
+            s.saved = cfg.values.into_iter().collect();
+            s.edits.clear();
+            drop(s);
+            refresh(&app, &state.borrow());
+            app.set_result(text.into());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
         app.on_preview(move || {
             let s = state.borrow();
-            let edits: Vec<config::Edit> = s
-                .edits
-                .iter()
-                .filter(|(p, _)| s.is_dirty(p))
-                .map(|(path, value)| config::Edit {
-                    path: path.clone(),
-                    value: value.clone(),
-                    op: config::Op::Set,
-                })
-                .collect();
+            let edits = s.edits();
             let text = if edits.is_empty() {
                 "変更はありません".to_string()
             } else {
