@@ -71,6 +71,16 @@ struct Capture {
     chord: String,
 }
 
+/// Sidebar bounds. The lower one keeps the handle on screen; the upper one
+/// stops the sidebar swallowing the pane it is meant to sit beside.
+const SIDEBAR_MIN: f32 = 150.0;
+const SIDEBAR_MAX: f32 = 560.0;
+const SIDEBAR_DEFAULT: f32 = 250.0;
+
+fn clamp_sidebar(width: f32) -> f32 {
+    width.clamp(SIDEBAR_MIN, SIDEBAR_MAX)
+}
+
 /// The palette the app itself uses, offered as presets.
 const PRESETS: &[&str] = &[
     "#11111b", "#181825", "#1e1e2e", "#313244", "#45475a", "#7f849c", "#cdd6f4", "#89b4fa",
@@ -567,6 +577,19 @@ fn main() -> Result<(), slint::PlatformError> {
         .map(|i| (i.path.clone(), i.ty.clone()))
         .collect();
 
+    {
+        let weak = app.as_weak();
+        app.on_resize_sidebar(move |delta| {
+            let app = weak.unwrap();
+            app.set_sidebar_width(clamp_sidebar(app.get_sidebar_width() + delta));
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_reset_sidebar(move || {
+            weak.unwrap().set_sidebar_width(SIDEBAR_DEFAULT);
+        });
+    }
     {
         let state = state.clone();
         let weak = app.as_weak();
@@ -1080,4 +1103,31 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     app.run()
+}
+
+#[cfg(test)]
+mod sidebar_tests {
+    use super::*;
+
+    #[test]
+    fn the_sidebar_stays_within_its_bounds() {
+        assert_eq!(clamp_sidebar(300.0), 300.0);
+        assert_eq!(clamp_sidebar(20.0), SIDEBAR_MIN, "the handle must stay reachable");
+        assert_eq!(clamp_sidebar(9999.0), SIDEBAR_MAX, "the sidebar must not swallow the pane");
+        assert_eq!(clamp_sidebar(SIDEBAR_DEFAULT), SIDEBAR_DEFAULT);
+    }
+
+    #[test]
+    fn dragging_past_an_edge_and_back_returns_to_where_it_was() {
+        // Each drag step is a delta, so clamping must not accumulate.
+        let mut w = SIDEBAR_DEFAULT;
+        for _ in 0..40 {
+            w = clamp_sidebar(w - 50.0);
+        }
+        assert_eq!(w, SIDEBAR_MIN);
+        for _ in 0..4 {
+            w = clamp_sidebar(w + 50.0);
+        }
+        assert_eq!(w, SIDEBAR_MIN + 200.0);
+    }
 }

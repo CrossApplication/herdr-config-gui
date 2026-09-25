@@ -652,7 +652,9 @@ component SettingRow inherits Rectangle {
                 font-size: 13px;
                 font-weight: 600;
                 vertical-alignment: center;
-                width: 220px;
+                min-width: 110px;
+                max-width: 220px;
+                horizontal-stretch: 1;
                 overflow: elide;
             }
 
@@ -689,7 +691,9 @@ component SettingRow inherits Rectangle {
             if item.kind != "bool" && item.kind != "rows": LineEdit {
                 text: item.value;
                 placeholder-text: item.default-text == "" ? "(未設定)" : item.default-text;
-                width: 240px;
+                min-width: 160px;
+                max-width: 260px;
+                horizontal-stretch: 1;
                 edited(v) => { root.edited(item.path, v); }
             }
 
@@ -699,12 +703,16 @@ component SettingRow inherits Rectangle {
                 clicked => { root.record(item.path); }
             }
 
+            // Last in the row and the least important, so this is what
+            // gives way when the pane is narrow.
             Text {
                 text: "既定 " + item.default-text;
                 color: Palette.faint;
                 font-size: 11px;
                 font-family: "Menlo";
                 vertical-alignment: center;
+                min-width: 0px;
+                horizontal-stretch: 2;
                 overflow: elide;
             }
         }
@@ -745,6 +753,7 @@ export component App inherits Window {
     in property <string> meta;
     in property <string> section-title;
     in property <string> filter;
+    in-out property <length> sidebar-width: 250px;
     in property <int> selected: 0;
     in property <int> dirty-count: 0;
     in property <string> result;
@@ -775,6 +784,9 @@ export component App inherits Window {
     callback picker-preset(int);
     callback picker-reset();
     callback picker-close();
+    // Clamping lives in Rust so it can be tested.
+    callback resize-sidebar(length);
+    callback reset-sidebar();
     callback filter-changed(string);
     callback select-section(int);
     callback edited(string, string);
@@ -853,7 +865,7 @@ export component App inherits Window {
         if !show-about: HorizontalLayout {
             // ---- sidebar ----
             Rectangle {
-                width: 250px;
+                width: root.sidebar-width;
                 background: Palette.panel;
                 ScrollView {
                     VerticalLayout {
@@ -889,7 +901,27 @@ export component App inherits Window {
                         }
                     }
                 }
-                Rectangle { x: parent.width - 1px; width: 1px; background: Palette.line; }
+            }
+
+            // Drag handle: a wide hit area drawing a thin line, so section
+            // names longer than the default width stay reachable.
+            Rectangle {
+                width: 7px;
+                Rectangle {
+                    x: 3px;
+                    width: split.has-hover || split.pressed ? 2px : 1px;
+                    height: parent.height;
+                    background: split.has-hover || split.pressed ? Palette.accent : Palette.line;
+                }
+                split := TouchArea {
+                    mouse-cursor: MouseCursor.col-resize;
+                    moved => {
+                        // The handle moves with the sidebar, so each step is
+                        // the offset from where the press landed.
+                        root.resize-sidebar(self.mouse-x - self.pressed-x);
+                    }
+                    double-clicked => { root.reset-sidebar(); }
+                }
             }
 
             // ---- items ----
