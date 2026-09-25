@@ -1303,12 +1303,26 @@ export component App inherits Window {
                 padding-left: 16px;
                 padding-right: 16px;
                 spacing: 10px;
+
+                // The report takes whatever room is left, so the controls sit
+                // against the right edge of the window.
+                Text {
+                    text: result;
+                    color: Palette.dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
                 Text {
                     text: dirty-count > 0 ? dirty-count + " 件の変更" : "変更なし";
                     color: dirty-count > 0 ? Palette.accent : Palette.dim;
                     font-size: 12px;
                     vertical-alignment: center;
-                    width: 90px;
+                    horizontal-alignment: right;
+                    horizontal-stretch: 0;
                 }
                 GhostButton {
                     label: "すべて取り消し";
@@ -1322,13 +1336,6 @@ export component App inherits Window {
                     label: "保存して反映";
                     tone: Palette.accent;
                     clicked => { save(); }
-                }
-                Text {
-                    text: result;
-                    color: Palette.dim;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    overflow: elide;
                 }
             }
         }
