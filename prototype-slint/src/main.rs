@@ -582,6 +582,7 @@ fn item_row(state: &State, item: &schema::Item, path: &str, filtering: bool) -> 
                     .map(|c| SharedString::from(c.as_str()))
                     .collect::<Vec<_>>(),
             )),
+            enum_strict: item.enum_strict,
             from_overlay: item.from_overlay,
             is_size: item.size,
             key_note: key_note(state, item, path).0.into(),

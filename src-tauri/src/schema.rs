@@ -44,6 +44,11 @@ pub struct Item {
     pub binding_kind: Option<&'static str>,
     /// Accepts the `1..9` range form (e.g. `switch_tab = "prefix+1..9"`).
     pub accepts_range: bool,
+    /// True when `enum_candidates` is the set herdr actually accepts, rather
+    /// than literals scraped out of prose. `keys.prefix` documents examples
+    /// (`Examples: "ctrl+b", "f12", "esc", "-"`), not members, so offering
+    /// only those would hide any other value the user has.
+    pub enum_strict: bool,
     /// The value is a color, so the form offers a picker. herdr does not
     /// validate colors, so this is the only place a bad one gets caught.
     pub color: bool,
@@ -105,6 +110,7 @@ fn overlay_item(section: &str, key: &str) -> Item {
         is_key_binding: false,
         binding_kind: None,
         accepts_range: false,
+        enum_strict: false,
         color: true,
         size: false,
         token_set: None,
@@ -176,6 +182,8 @@ pub fn augment(schema: &mut Schema) {
             is_key_binding: extra.binding_kind.is_some(),
             binding_kind: extra.binding_kind,
             accepts_range: false,
+            // Overlay enums were read from herdr's own rejection message.
+            enum_strict: !extra.enum_values.is_empty(),
             color: overlay::is_color(extra.section, extra.key),
             size: overlay::is_size(extra.section, extra.key),
             token_set: overlay::token_set(extra.section, extra.key),
@@ -192,6 +200,7 @@ pub fn augment(schema: &mut Schema) {
             .and_then(|s| s.items.iter_mut().find(|i| i.key == o.key))
         {
             item.enum_candidates = o.members.iter().map(|m| m.to_string()).collect();
+            item.enum_strict = true;
         }
     }
 
@@ -405,6 +414,7 @@ pub fn parse(text: &str) -> Schema {
                         is_key_binding,
                         binding_kind,
                         accepts_range,
+                        enum_strict: false,
                         color,
                         size,
                         token_set,
@@ -578,6 +588,30 @@ mod tests {
         let before = once.item_count;
         augment(&mut once);
         assert_eq!(once.item_count, before, "augment must be idempotent");
+    }
+
+    #[test]
+    fn only_verified_enums_are_strict() {
+        let s = build(FIXTURE);
+        let get = |path: &str| {
+            s.sections
+                .iter()
+                .flat_map(|sec| sec.items.iter())
+                .find(|i| i.path == path)
+                .unwrap_or_else(|| panic!("missing {path}"))
+        };
+
+        // Read back from herdr's own rejection message.
+        assert!(get("keys.command.type").enum_strict);
+        assert!(get("ui.agent_panel_scope").enum_strict);
+
+        // Scraped from prose. `keys.prefix` documents examples, so a form that
+        // offered only these would hide a value like `ctrl+a`.
+        let prefix = get("keys.prefix");
+        assert!(!prefix.enum_strict);
+        assert!(prefix.enum_candidates.contains(&"ctrl+b".to_string()));
+        assert!(!get("terminal.new_cwd").enum_strict, "~/Projects is an example");
+        assert!(!get("ui.status_indicators").enum_strict);
     }
 
     #[test]

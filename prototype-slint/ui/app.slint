@@ -73,8 +73,10 @@ export struct ItemRow {
     label: string,
     /// `既定` / `設定済み` / `無効` / `未保存`.
     state-label: string,
-    /// Members herdr accepts, when it named them.
+    /// Members herdr accepts, or literals scraped from prose when not strict.
     enum-values: [string],
+    /// True only when the members were read from herdr's own rejection.
+    enum-strict: bool,
     /// Contributed by the overlay, not by `herdr --default-config`.
     from-overlay: bool,
     /// A popup dimension: a percentage string or a bare cell count.
@@ -897,7 +899,7 @@ component SettingRow inherits Rectangle {
                 width: 240px;
             }
 
-            if item.enum-values.length > 0 && item.kind != "bool": ComboBox {
+            if item.enum-strict && item.kind != "bool": ComboBox {
                 model: item.enum-values;
                 current-value: item.value;
                 min-width: 160px;
@@ -906,7 +908,7 @@ component SettingRow inherits Rectangle {
                 selected(v) => { root.edited(item.path, v); }
             }
 
-            if item.enum-values.length == 0 && item.kind != "bool" && item.kind != "rows": LineEdit {
+            if !item.enum-strict && item.kind != "bool" && item.kind != "rows": LineEdit {
                 text: item.value;
                 placeholder-text: item.default-text == "" ? "(未設定)" : item.default-text;
                 min-width: 160px;
@@ -943,6 +945,35 @@ component SettingRow inherits Rectangle {
                 min-width: 0px;
                 horizontal-stretch: 2;
                 overflow: elide;
+            }
+        }
+
+        if !item.enum-strict && item.enum-values.length > 0: HorizontalLayout {
+            spacing: 5px;
+            alignment: start;
+            Text {
+                text: "候補:";
+                color: Palette.faint;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+            // Documentation examples, not a closed set, so they are offered
+            // rather than enforced.
+            for c in item.enum-values: Rectangle {
+                border-color: sg.has-hover ? Palette.accent : Palette.line;
+                border-width: 1px;
+                border-radius: 4px;
+                height: 18px;
+                width: lbl.preferred-width + 12px;
+                lbl := Text {
+                    text: c;
+                    color: sg.has-hover ? Palette.accent : Palette.dim;
+                    font-family: "Menlo";
+                    font-size: 10px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                sg := TouchArea { clicked => { root.edited(item.path, c); } }
             }
         }
 
