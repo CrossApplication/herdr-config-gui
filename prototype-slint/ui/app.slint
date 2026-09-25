@@ -121,6 +121,31 @@ component Chip inherits Rectangle {
     }
 }
 
+// For a secondary action that should not compete with the buttons beside it.
+component TextLink inherits Rectangle {
+    in property <string> label;
+    in property <color> tone: Palette.dim;
+    callback clicked();
+
+    width: txt.preferred-width;
+    height: 28px;
+    txt := Text {
+        text: root.label;
+        color: touch.has-hover ? Palette.accent : root.tone;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        y: parent.height / 2 + 9px;
+        height: 1px;
+        background: touch.has-hover ? Palette.accent : transparent;
+    }
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 component GhostButton inherits Rectangle {
     in property <string> label;
     in property <color> tone: Palette.dim;
@@ -511,6 +536,79 @@ component ColorPicker inherits Rectangle {
                     tone: Palette.accent;
                     clicked => { root.close(); }
                 }
+            }
+        }
+    }
+}
+
+// Attribution and licences. The Slint royalty-free licence asks for the
+// `AboutSlint` widget in a screen reachable from the top-level menu.
+component AboutPanel inherits Rectangle {
+    callback close();
+
+    background: #11111bb8;
+    TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: 420px;
+        height: box.preferred-height + 32px;
+        background: Palette.panel;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 10px;
+        TouchArea { }
+
+        box := VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                Text {
+                    text: "herdr Config 0.1.0";
+                    color: Palette.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Rectangle { }
+                GhostButton {
+                    label: "閉じる";
+                    tone: Palette.accent;
+                    clicked => { root.close(); }
+                }
+            }
+
+            Text {
+                text: "herdr の config.toml を編集する GUI";
+                color: Palette.dim;
+                font-size: 12px;
+            }
+            Text {
+                text: "Copyright (c) 2026 Members Co., Ltd\nAll rights reserved.\nBSD-3-Clause";
+                color: Palette.dim;
+                font-family: "Menlo";
+                font-size: 11px;
+            }
+
+            Rectangle { height: 1px; background: Palette.line; }
+
+            // Left to itself this fills whatever space it is given, so the
+            // logo has to be boxed.
+            Rectangle {
+                height: 72px;
+                HorizontalLayout {
+                    alignment: center;
+                    AboutSlint {
+                        height: 72px;
+                        width: 240px;
+                    }
+                }
+            }
+            Text {
+                text: "UI は Slint（Royalty-free 2.0）を使用しています。";
+                color: Palette.faint;
+                font-size: 10px;
+                horizontal-alignment: center;
             }
         }
     }
@@ -1203,7 +1301,7 @@ export component App inherits Window {
     in property <int> selected: 0;
     in property <int> dirty-count: 0;
     in property <string> result;
-    in property <bool> show-about: false;
+    in property <bool> about-open: false;
     in property <[string]> allowed-tokens;
     in property <bool> picker-open: false;
     in property <string> picker-title;
@@ -1272,6 +1370,7 @@ export component App inherits Window {
     callback save();
     callback revert();
     callback toggle-about();
+    callback close-about();
 
     VerticalLayout {
         // ---- top bar ----
@@ -1302,35 +1401,11 @@ export component App inherits Window {
                     vertical-alignment: center;
                     overflow: elide;
                 }
-                GhostButton {
-                    label: show-about ? "設定に戻る" : "About";
-                    tone: Palette.accent;
-                    clicked => { toggle-about(); }
-                }
             }
             Rectangle { y: parent.height - 1px; height: 1px; background: Palette.line; }
         }
 
-        if show-about: VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
-            alignment: start;
-            Text {
-                text: "herdr Config 0.1.0";
-                color: Palette.text;
-                font-size: 15px;
-                font-weight: 700;
-            }
-            Text {
-                text: "Copyright (c) 2026 Members Co., Ltd  All rights reserved.\nBSD-3-Clause";
-                color: Palette.dim;
-                font-size: 12px;
-            }
-            // Required by the Slint royalty-free licence.
-            AboutSlint { }
-        }
-
-        if !show-about: HorizontalLayout {
+        HorizontalLayout {
             // ---- sidebar ----
             Rectangle {
                 width: root.sidebar-width;
@@ -1505,6 +1580,11 @@ export component App inherits Window {
                 // 52 = 12 + 28 + 12
                 spacing: 10px;
 
+                TextLink {
+                    label: "About";
+                    clicked => { toggle-about(); }
+                }
+
                 // The report takes whatever room is left, so the controls sit
                 // against the right edge of the window.
                 Text {
@@ -1548,6 +1628,10 @@ export component App inherits Window {
                 }
             }
         }
+    }
+
+    if about-open: AboutPanel {
+        close() => { root.close-about(); }
     }
 
     if diff-open: DiffPanel {

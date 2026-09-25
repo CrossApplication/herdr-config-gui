@@ -1505,7 +1505,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = app.as_weak();
         app.on_toggle_about(move || {
             let app = weak.unwrap();
-            app.set_show_about(!app.get_show_about());
+            app.set_about_open(true);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_close_about(move || {
+            weak.unwrap().set_about_open(false);
         });
     }
 
