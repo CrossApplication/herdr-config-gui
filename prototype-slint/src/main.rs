@@ -576,12 +576,17 @@ fn item_row(state: &State, item: &schema::Item, path: &str, filtering: bool) -> 
             .into(),
             state_label: state.state_label(path).into(),
             empty_disables: item.empty_disables,
-            enum_values: ModelRc::new(VecModel::from(
+            // Only a verified set reaches the form. Prose-scraped literals are
+            // examples, and the documentation line below the field already
+            // lists them.
+            enum_values: ModelRc::new(VecModel::from(if item.enum_strict {
                 item.enum_candidates
                     .iter()
                     .map(|c| SharedString::from(c.as_str()))
-                    .collect::<Vec<_>>(),
-            )),
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            })),
             enum_strict: item.enum_strict,
             from_overlay: item.from_overlay,
             is_size: item.size,
