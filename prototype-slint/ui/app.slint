@@ -1395,28 +1395,44 @@ export component App inherits Window {
             height: 44px;
             background: Palette.panel;
             HorizontalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
-                spacing: 12px;
-                Text {
-                    text: "herdr Config";
-                    color: Palette.text;
-                    font-size: 14px;
-                    font-weight: 700;
-                    vertical-alignment: center;
+                spacing: 0px;
+
+                // The title sits over the sidebar and the search over the
+                // pane it filters, so the search's left edge lands on the
+                // same boundary the splitter draws below.
+                Rectangle {
+                    width: root.sidebar-width;
+                    Text {
+                        x: 16px;
+                        text: "herdr Config";
+                        color: Palette.text;
+                        font-size: 14px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
                 }
-                LineEdit {
-                    placeholder-text: "設定を検索（キー名・説明文）";
-                    text: root.filter;
-                    width: 250px;
-                    edited(v) => { root.filter-changed(v); }
-                }
-                Text {
-                    text: meta;
-                    color: Palette.dim;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    overflow: elide;
+
+                HorizontalLayout {
+                    padding-right: 16px;
+                    // 44 = 9 + 26 + 9, which centres the field in the bar.
+                    padding-top: 9px;
+                    padding-bottom: 9px;
+                    spacing: 12px;
+                    LineEdit {
+                        placeholder-text: "設定を検索（キー名・説明文）";
+                        text: root.filter;
+                        width: 250px;
+                        height: 26px;
+                        edited(v) => { root.filter-changed(v); }
+                    }
+                    Text {
+                        text: meta;
+                        color: Palette.dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        min-width: 0px;
+                        overflow: elide;
+                    }
                 }
             }
             Rectangle { y: parent.height - 1px; height: 1px; background: Palette.line; }
