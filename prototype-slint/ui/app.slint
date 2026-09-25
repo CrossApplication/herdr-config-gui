@@ -550,7 +550,7 @@ component AboutPanel inherits Rectangle {
     TouchArea { clicked => { root.close(); } }
 
     Rectangle {
-        width: 420px;
+        width: 480px;
         height: box.preferred-height + 32px;
         background: Palette.panel;
         border-color: Palette.line;
@@ -594,19 +594,36 @@ component AboutPanel inherits Rectangle {
 
             // Left to itself this fills whatever space it is given, so the
             // logo has to be boxed.
+            //
+            // `AboutSlint` opens slint.dev when clicked but sets no cursor,
+            // so a transparent layer on top supplies the affordance and opens
+            // the same URL. The widget itself is still what is displayed,
+            // which is what the royalty-free licence asks for.
             Rectangle {
-                height: 72px;
+                height: 140px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: logoTouch.has-hover ? Palette.line : transparent;
+                background: logoTouch.has-hover ? #ffffff0a : transparent;
+
                 HorizontalLayout {
                     alignment: center;
                     AboutSlint {
-                        height: 72px;
-                        width: 240px;
+                        height: 140px;
+                        width: 380px;
                     }
+                }
+
+                logoTouch := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { Platform.open-url("https://slint.dev"); }
                 }
             }
             Text {
-                text: "UI は Slint（Royalty-free 2.0）を使用しています。";
-                color: Palette.faint;
+                text: logoTouch.has-hover
+                    ? "クリックで slint.dev を開きます"
+                    : "UI は Slint（Royalty-free 2.0）を使用しています。";
+                color: logoTouch.has-hover ? Palette.accent : Palette.faint;
                 font-size: 10px;
                 horizontal-alignment: center;
             }
