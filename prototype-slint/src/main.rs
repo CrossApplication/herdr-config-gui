@@ -100,6 +100,7 @@ struct State {
     picker: Option<Picker>,
     capture: Option<Capture>,
     problems_open: bool,
+    diff_open: bool,
     /// Array-of-tables entries marked for deletion, e.g. `keys.command[1]`.
     removed_entries: std::collections::BTreeSet<String>,
 }
@@ -724,6 +725,7 @@ fn refresh_problems(app: &App, state: &State) {
     app.set_problem_errors(errors as i32);
     app.set_problem_warnings((found.len() - errors) as i32);
     app.set_problems_open(state.problems_open);
+    app.set_diff_open(state.diff_open);
 
     let label = |kind: &str| match kind {
         "invalid" => "構文エラー",
@@ -881,6 +883,7 @@ fn main() -> Result<(), slint::PlatformError> {
         picker: None,
         capture: None,
         problems_open: false,
+        diff_open: false,
         removed_entries: Default::default(),
     }));
 
@@ -1436,6 +1439,7 @@ fn main() -> Result<(), slint::PlatformError> {
             s.saved = cfg.values.into_iter().collect();
             s.edits.clear();
             s.removed_entries.clear();
+            s.diff_open = false;
             drop(s);
             refresh(&app, &state.borrow());
             app.set_result(text.into());
@@ -1445,37 +1449,56 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = app.as_weak();
         app.on_preview(move || {
+            let app = weak.unwrap();
             let s = state.borrow();
             let edits = s.edits();
-            let text = if edits.is_empty() {
-                "変更はありません".to_string()
-            } else {
-                let raw = std::fs::read_to_string(
-                    config::config_path().unwrap_or_default(),
-                )
+            if edits.is_empty() {
+                return;
+            }
+            let raw = config::config_path()
+                .and_then(|p| std::fs::read_to_string(p).ok())
                 .unwrap_or_default();
-                match config::apply_edits(&raw, &edits) {
-                    Ok((after, changes)) => {
-                        let report = check::check_toml(&after);
-                        let summary = changes
-                            .iter()
-                            .filter(|c| c.action != "noop")
-                            .map(|c| format!("{} {}", c.action, c.path))
-                            .collect::<Vec<_>>()
-                            .join(" / ");
-                        format!(
-                            "{summary}  |  herdr: {}",
-                            if report.ok {
-                                "問題なし".to_string()
-                            } else {
-                                report.raw.replace('\n', " ")
-                            }
-                        )
-                    }
-                    Err(e) => e,
+            drop(s);
+
+            match config::apply_edits(&raw, &edits) {
+                Ok((after, changes)) => {
+                    // Ask herdr about the exact bytes a save would write.
+                    let report = check::check_toml(&after);
+                    let rows: Vec<DiffRow> = changes
+                        .iter()
+                        .filter(|c| c.action != "noop")
+                        .map(|c| DiffRow {
+                            action: c.action.into(),
+                            path: c.path.clone().into(),
+                            from: c
+                                .from
+                                .clone()
+                                .unwrap_or_else(|| "(既定)".into())
+                                .into(),
+                            to: c.to.clone().unwrap_or_else(|| "(既定に戻す)".into()).into(),
+                        })
+                        .collect();
+                    app.set_diff_rows(ModelRc::new(VecModel::from(rows)));
+                    app.set_diff_check(
+                        if report.ok { String::new() } else { report.raw.clone() }.into(),
+                    );
+                    app.set_diff_check_ok(report.ok);
+                    app.set_diff_fatal(report.fatal());
+                    app.set_diff_after(after.into());
+                    state.borrow_mut().diff_open = true;
+                    refresh(&app, &state.borrow());
                 }
-            };
-            weak.unwrap().set_result(text.into());
+                Err(e) => app.set_result(e.into()),
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_close_diff(move || {
+            state.borrow_mut().diff_open = false;
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
         });
     }
     {

@@ -36,6 +36,14 @@ export struct RowEntry {
     preview: string,
 }
 
+export struct DiffRow {
+    // `add` | `update` | `remove`
+    action: string,
+    path: string,
+    from: string,
+    to: string,
+}
+
 export struct ProblemEntry {
     path: string,
     value: string,
@@ -502,6 +510,177 @@ component ColorPicker inherits Rectangle {
                     label: "閉じる";
                     tone: Palette.accent;
                     clicked => { root.close(); }
+                }
+            }
+        }
+    }
+}
+
+// What a save would write, checked through herdr before anything is written.
+component DiffPanel inherits Rectangle {
+    in property <[DiffRow]> rows;
+    in property <string> check;
+    in property <bool> check-ok;
+    in property <bool> fatal;
+    in property <string> after;
+    callback save();
+    callback close();
+
+    background: #11111bb8;
+    TouchArea { clicked => { root.close(); } }
+
+    Rectangle {
+        width: min(860px, parent.width - 32px);
+        height: min(parent.height - 60px, 760px);
+        background: Palette.panel;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 10px;
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: "保存される差分";
+                    color: Palette.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                Chip {
+                    label: root.rows.length + " 件";
+                    tone: Palette.accent;
+                }
+                Rectangle { }
+                GhostButton {
+                    label: "閉じる";
+                    clicked => { root.close(); }
+                }
+                GhostButton {
+                    label: "保存して反映";
+                    tone: Palette.accent;
+                    filled: true;
+                    enabled: !root.fatal;
+                    clicked => { root.save(); }
+                }
+            }
+
+            // herdr's verdict on the exact bytes that would be written.
+            Rectangle {
+                height: verdict.preferred-height + 16px;
+                border-radius: 6px;
+                background: Palette.row;
+                border-width: 1px;
+                border-color: root.fatal ? Palette.red
+                    : root.check-ok ? Palette.set : Palette.warn;
+                verdict := VerticalLayout {
+                    x: 12px;
+                    y: 8px;
+                    width: parent.width - 24px;
+                    Text {
+                        text: root.fatal
+                            ? "この内容では herdr が設定ファイル全体を破棄します。保存できません。"
+                            : root.check-ok
+                                ? "herdr config check: 問題なし"
+                                : "herdr が無視する項目があります（他の設定は有効です）";
+                        color: root.fatal ? Palette.red
+                            : root.check-ok ? Palette.set : Palette.warn;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    if root.check != "": Text {
+                        text: root.check;
+                        color: Palette.dim;
+                        font-family: "Menlo";
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 3px;
+                    alignment: start;
+                    for d in root.rows: Rectangle {
+                        height: 26px;
+                        border-radius: 5px;
+                        background: Palette.row;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            Text {
+                                text: d.action;
+                                color: d.action == "add" ? Palette.set
+                                    : d.action == "remove" ? Palette.red : Palette.accent;
+                                font-size: 10px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                width: 56px;
+                            }
+                            Text {
+                                text: d.path;
+                                color: Palette.text;
+                                font-family: "Menlo";
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                min-width: 0px;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: d.from;
+                                color: Palette.dim;
+                                font-family: "Menlo";
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: "→";
+                                color: Palette.faint;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: d.to;
+                                color: Palette.accent;
+                                font-family: "Menlo";
+                                font-size: 11px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "保存後のファイル内容";
+                        color: Palette.dim;
+                        font-size: 11px;
+                    }
+                    Rectangle {
+                        background: Palette.bg;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: Palette.line;
+                        height: body.preferred-height + 16px;
+                        body := Text {
+                            x: 12px;
+                            y: 8px;
+                            width: parent.width - 24px;
+                            text: root.after;
+                            color: Palette.dim;
+                            font-family: "Menlo";
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
                 }
             }
         }
@@ -1048,6 +1227,12 @@ export component App inherits Window {
     in property <int> problem-errors;
     in property <int> problem-warnings;
     in property <bool> problems-open: false;
+    in property <bool> diff-open: false;
+    in property <[DiffRow]> diff-rows;
+    in property <string> diff-check;
+    in property <bool> diff-check-ok;
+    in property <bool> diff-fatal;
+    in property <string> diff-after;
     // An array-of-tables section is a list of entries, not a set of settings.
     in property <bool> section-is-list: false;
     in property <[EntryCard]> entries;
@@ -1064,6 +1249,7 @@ export component App inherits Window {
     callback filter-changed(string);
     callback open-problems();
     callback close-problems();
+    callback close-diff();
     callback problem-goto(string);
     callback add-entry();
     callback remove-entry(int);
@@ -1343,14 +1529,6 @@ export component App inherits Window {
                     clicked => { open-problems(); }
                 }
 
-                if dirty-count > 0: Text {
-                    text: dirty-count + " 件の変更";
-                    color: Palette.accent;
-                    font-size: 12px;
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
-                    height: 28px;
-                }
                 GhostButton {
                     label: "すべて取り消し";
                     enabled: dirty-count > 0;
@@ -1370,6 +1548,16 @@ export component App inherits Window {
                 }
             }
         }
+    }
+
+    if diff-open: DiffPanel {
+        rows: diff-rows;
+        check: diff-check;
+        check-ok: diff-check-ok;
+        fatal: diff-fatal;
+        after: diff-after;
+        save() => { root.save(); }
+        close() => { root.close-diff(); }
     }
 
     if problems-open: ProblemsPanel {
