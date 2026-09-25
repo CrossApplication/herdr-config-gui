@@ -11,7 +11,9 @@ publish = false
 [dependencies]
 # Slint under the royalty-free licence; the About screen carries the
 # attribution that licence asks for.
-slint = "1.18"
+# `unstable-winit-030` exposes the raw winit events, which carry the physical
+# key Slint itself discards. Needed to match the browser build's ev.code.
+slint = { version = "1.18", features = ["unstable-winit-030"] }
 serde = { version = "1", features = ["derive"] }
 toml_edit = "0.22"
 regex = "1"

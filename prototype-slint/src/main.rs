@@ -24,6 +24,9 @@ mod color;
 /// Keybinding syntax from a Slint key event.
 mod keys;
 
+/// The physical key winit knows and Slint discards.
+mod physical;
+
 /// The rows editor's own logic, which has no counterpart in the Tauri build:
 /// there it lives in TypeScript as `src/rows.ts`.
 mod rows;
@@ -507,6 +510,12 @@ fn main() -> Result<(), slint::PlatformError> {
         capture: None,
     }));
 
+    // Must be selected before any window exists.
+    slint::BackendSelector::new()
+        .with_winit_custom_application_handler(physical::PhysicalKeyRecorder)
+        .select()
+        .map_err(|e| slint::PlatformError::Other(format!("backend selection failed: {e}")))?;
+
     let app = App::new()?;
     app.set_meta(meta.into());
     app.set_result("書き込みは行いません（試作のため読み取り専用）".into());
@@ -672,7 +681,8 @@ fn main() -> Result<(), slint::PlatformError> {
             // Raw record of what Slint hands us, so real hardware presses can
             // be compared against what the browser build sees.
             eprintln!(
-                "[key] slint={key:?} codepoints=[{}] ctrl={ctrl} shift={shift} alt={alt} meta={meta}",
+                "[key] slint={key:?} physical={:?} codepoints=[{}] ctrl={ctrl} shift={shift} alt={alt} meta={meta}",
+                physical::last(),
                 key.chars()
                     .map(|c| format!("U+{:04X}", c as u32))
                     .collect::<Vec<_>>()
@@ -705,6 +715,9 @@ fn main() -> Result<(), slint::PlatformError> {
 
             let raw = keys::RawKey {
                 key: key.to_string(),
+                // Recorded by the winit handler just before Slint delivered
+                // this same press.
+                physical: physical::last(),
                 ctrl,
                 shift,
                 alt,

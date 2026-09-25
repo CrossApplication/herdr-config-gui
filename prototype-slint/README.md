@@ -82,19 +82,40 @@ position of a key" と明記している。ブラウザの `KeyboardEvent` は `
 | ctrl+a | `text="a"` ctrl=true | `ctrl+a` |
 | cmd+a | `text="a"` meta=true | `cmd+a` |
 | shift+7 | `text="&"` shift=true | `ampersand` |
-| **option+a** | **`text="å"` alt=true** | **`alt+å`** |
+| **option+a** | **`text="å"` alt=true, physical=`a`** | **`alt+a`** |
 | esc / f12 | `Key.Escape` / `Key.F12` | `esc` / `f12` |
 
 修飾キーは正しく届く。ctrl と cmd が入れ替わるようなことはない。
 
-### 唯一の制約
+### 物理キーの取得（解決済み）
 
-macOS の option は文字を合成する。`option+a` は `å` として届き、**物理キーがないため
-`a` に戻せない**。現行版は `ev.code = "KeyA"` から `alt+a` を復元しているが、Slint では
-できず、合成後の文字で記録される。
+Slint の公開 API は論理キーしか渡さないが、**winit は物理キーを持っており、Slint の
+winit バックエンドはそれを横取りさせてくれる**。
 
-herdr 自身が「alt は端末や tmux の設定次第で届かない」と警告している領域なので実害は
-限定的だが、macOS で alt を含むバインドを録音する場合は現行版のほうが正確。
+```rust
+slint::BackendSelector::new()
+    .with_winit_custom_application_handler(PhysicalKeyRecorder)
+    .select()?;
+```
+
+`CustomApplicationHandler` のドキュメントいわく "All functions are invoked before
+Slint sees them"。押下のたびに `winit::event::KeyEvent::physical_key` を記録し、
+Slint が同じ押下を届けた時点で読み出す。`EventResult::Propagate` を返すので
+Slint 側の処理は一切変わらない。
+
+`physical_key` は winit の定義で「レイアウトに依存しないキー位置」であり、
+ブラウザの `ev.code` と同じ概念。これで **TS 版と同じ判定**ができる。
+
+| 用途 | 使う値 | 理由 |
+| --- | --- | --- |
+| 英字・数字・F キー | 物理キー | shift で大文字化し、macOS の alt が合成文字に変える |
+| 記号 | 論理キー | 端末が送るのは文字そのもの。`shift+7` は `&` ＝ `ampersand` |
+
+`option+a` は `alt+a` として記録されるようになった。制約は解消している。
+
+利用するには `slint` の feature に `unstable-winit-030` が要る。名前のとおり
+unstable 扱いで、winit のメジャー更新時に module 名が変わる
+（`winit_030` → `winit_031` など）可能性がある。
 
 ### 全キーを奪えるか
 

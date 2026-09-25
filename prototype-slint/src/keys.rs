@@ -46,11 +46,18 @@ impl Chord {
     }
 }
 
-/// What the Slint layer reports for one keypress.
+/// What the Slint layer reports for one keypress, plus the physical key
+/// recovered from winit.
 pub struct RawKey {
     /// Either a named key (`esc`, `left`, `f12`) resolved in the .slint file,
-    /// or the character the layout produced.
+    /// or the character the layout produced. Slint's own contribution, and
+    /// the equivalent of the browser's `ev.key`.
     pub key: String,
+    /// The key's position, independent of layout and modifiers: the
+    /// equivalent of the browser's `ev.code`. Only letters, digits and
+    /// function keys are reported; anything else is better identified by the
+    /// character.
+    pub physical: Option<String>,
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
@@ -64,14 +71,16 @@ pub fn is_modifier_only(key: &str) -> bool {
 
 /// Turn a keypress into herdr syntax, without any `prefix+`.
 ///
-/// A printable symbol already carries shift -- `&` is what shift+7 sends and
-/// what herdr names `ampersand` -- so shift is dropped for those, matching
-/// what the terminal would report.
+/// The two sources are used for what each is good at, the same split the
+/// browser build makes:
 ///
-/// The case this cannot cover: on macOS, alt composes. Pressing alt+a sends
-/// `a-ring`, and with no physical key available there is no way back to `a`.
-/// The browser build reads `ev.code` for exactly this. Here the chord is
-/// recorded as the composed character instead.
+///   - Letters, digits and function keys come from the physical key, because
+///     shift uppercases the character and macOS composes it under alt --
+///     `option+a` arrives as `a-ring`, and only the position says `a`.
+///   - Symbols come from the character, because the terminal sends the
+///     character itself: `shift+7` arrives as `&`, which herdr names
+///     `ampersand`, and reporting shift alongside it would describe a chord
+///     no terminal sends.
 pub fn from_event(raw: &RawKey, mac: bool) -> Option<String> {
     if is_modifier_only(&raw.key) {
         return None;
@@ -88,18 +97,21 @@ pub fn from_event(raw: &RawKey, mac: bool) -> Option<String> {
     }
 
     let chars: Vec<char> = raw.key.chars().collect();
-    let (key, shift_inherent) = if chars.len() == 1 {
-        let c = chars[0];
-        if c.is_ascii_alphabetic() {
-            (c.to_ascii_lowercase().to_string(), false)
-        } else if let Some((_, name)) = PUNCT.iter().find(|(p, _)| *p == c) {
-            ((*name).to_string(), true)
-        } else if c.is_ascii_digit() {
-            (c.to_string(), false)
-        } else {
-            // A symbol the layout produced; shift is already baked into it.
-            (c.to_string(), true)
+    let printable = (chars.len() == 1).then(|| chars[0]);
+    // A symbol the layout produced. `alt` is excluded because macOS composes
+    // characters with it, which is not a symbol key.
+    let symbol = printable.is_some_and(|c| !c.is_ascii_alphanumeric()) && !raw.alt;
+
+    let (key, shift_inherent) = if symbol {
+        let c = printable.unwrap();
+        match PUNCT.iter().find(|(p, _)| *p == c) {
+            Some((_, name)) => ((*name).to_string(), true),
+            None => (c.to_string(), true),
         }
+    } else if let Some(p) = raw.physical.as_deref() {
+        (p.to_string(), false)
+    } else if let Some(c) = printable {
+        (c.to_ascii_lowercase().to_string(), false)
     } else {
         (raw.key.to_lowercase(), false)
     };
@@ -161,7 +173,19 @@ mod tests {
     use super::*;
 
     fn raw(key: &str, ctrl: bool, shift: bool, alt: bool, meta: bool) -> RawKey {
-        RawKey { key: key.into(), ctrl, shift, alt, meta }
+        RawKey { key: key.into(), physical: None, ctrl, shift, alt, meta }
+    }
+
+    /// The same press, with the physical key winit supplies.
+    fn raw_phys(key: &str, physical: &str, ctrl: bool, shift: bool, alt: bool, meta: bool) -> RawKey {
+        RawKey {
+            key: key.into(),
+            physical: Some(physical.into()),
+            ctrl,
+            shift,
+            alt,
+            meta,
+        }
     }
 
     #[test]
@@ -216,11 +240,41 @@ mod tests {
     }
 
     #[test]
-    fn what_slint_cannot_recover_is_recorded_as_the_composed_character() {
-        // macOS alt+a sends `a-ring`. With no physical key there is no way
-        // back to `a`, so the chord names what was actually sent. The browser
-        // build reads ev.code here and produces `alt+a` instead.
+    fn the_physical_key_undoes_macos_alt_composition() {
+        // Slint alone reports `a-ring` for option+a and cannot get back to
+        // `a`. winit's physical key can, which is what the browser build does
+        // with ev.code.
         assert_eq!(from_event(&raw("å", false, false, true, false), true).unwrap(), "alt+å");
+        assert_eq!(
+            from_event(&raw_phys("å", "a", false, false, true, false), true).unwrap(),
+            "alt+a"
+        );
+    }
+
+    #[test]
+    fn the_physical_key_is_preferred_for_letters_digits_and_function_keys() {
+        // Shift uppercases the character, so the position is what identifies
+        // the key.
+        assert_eq!(
+            from_event(&raw_phys("R", "r", true, true, false, false), true).unwrap(),
+            "ctrl+shift+r"
+        );
+        assert_eq!(from_event(&raw_phys("1", "1", true, false, false, false), true).unwrap(), "ctrl+1");
+        assert_eq!(from_event(&raw_phys("f12", "f12", false, false, false, false), true).unwrap(), "f12");
+    }
+
+    #[test]
+    fn symbols_still_come_from_the_character_not_the_position() {
+        // shift+7 is `&` on a US layout and something else elsewhere; herdr
+        // wants the character, which is what the terminal sends.
+        assert_eq!(
+            from_event(&raw_phys("&", "7", false, true, false, false), true).unwrap(),
+            "ampersand"
+        );
+        assert_eq!(
+            from_event(&raw_phys("|", "backslash", false, true, false, false), true).unwrap(),
+            "|"
+        );
     }
 
     #[test]
