@@ -100,6 +100,29 @@ struct State {
     picker: Option<Picker>,
     capture: Option<Capture>,
     problems_open: bool,
+    /// Array-of-tables entries marked for deletion, e.g. `keys.command[1]`.
+    removed_entries: std::collections::BTreeSet<String>,
+}
+
+/// `keys.command[0].key` -> `keys.command.key`, for schema lookups.
+fn strip_index(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut depth = 0usize;
+    for c in path.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The index in a path that ends in one: `keys.command[2]` -> 2.
+fn entry_index_of(path: &str) -> Option<usize> {
+    let rest = path.rsplit_once('[')?.1;
+    rest.strip_suffix(']')?.parse().ok()
 }
 
 impl State {
@@ -125,15 +148,30 @@ impl State {
 
     /// Everything a save would send.
     fn edits(&self) -> Vec<config::Edit> {
-        self.edits
+        let removed_prefixes: Vec<String> =
+            self.removed_entries.iter().map(|p| format!("{p}.")).collect();
+        let mut out: Vec<config::Edit> = self
+            .edits
             .iter()
             .filter(|(p, _)| self.is_dirty(p))
+            // No point writing into an entry that is about to be deleted.
+            .filter(|(p, _)| !removed_prefixes.iter().any(|pre| p.starts_with(pre)))
             .map(|(path, value)| config::Edit {
                 path: path.clone(),
                 value: value.clone(),
                 op: config::Op::Set,
             })
-            .collect()
+            .collect();
+        out.extend(self.removed_entries.iter().map(|path| config::Edit {
+            path: path.clone(),
+            value: None,
+            op: config::Op::RemoveEntry,
+        }));
+        out
+    }
+
+    fn has_pending(&self) -> bool {
+        self.dirty_count() > 0 || !self.removed_entries.is_empty()
     }
 
     fn is_dirty(&self, path: &str) -> bool {
@@ -152,12 +190,66 @@ impl State {
         }
     }
 
+    /// Items in an array-of-tables section are templates: the schema knows
+    /// `keys.command.key`, the document holds `keys.command[0].key`.
     fn item(&self, path: &str) -> Option<&schema::Item> {
+        let generic = strip_index(path);
         self.schema
             .sections
             .iter()
             .flat_map(|s| s.items.iter())
-            .find(|i| i.path == path)
+            .find(|i| i.path == path || i.path == generic)
+    }
+
+    /// Entry indices in use for an array-of-tables section, lowest first.
+    fn entry_indices(&self, section: &str) -> Vec<usize> {
+        let prefix = format!("{section}[");
+        let mut found: std::collections::BTreeSet<usize> = Default::default();
+        for key in self.saved.keys().chain(self.edits.keys()) {
+            if let Some(rest) = key.strip_prefix(&prefix) {
+                if let Some((n, _)) = rest.split_once(']') {
+                    if let Ok(i) = n.parse::<usize>() {
+                        found.insert(i);
+                    }
+                }
+            }
+        }
+        for removed in &self.removed_entries {
+            if let Some(i) = entry_index_of(removed) {
+                found.remove(&i);
+            }
+        }
+        found.into_iter().collect()
+    }
+
+    /// Append an entry, seeded so it is a valid row rather than a blank one.
+    fn add_entry(&mut self, section: &str) {
+        let used = self.entry_indices(section);
+        let removed: Vec<usize> = self
+            .removed_entries
+            .iter()
+            .filter(|p| p.starts_with(&format!("{section}[")))
+            .filter_map(|p| entry_index_of(p))
+            .collect();
+        let next = used
+            .iter()
+            .chain(removed.iter())
+            .copied()
+            .max()
+            .map_or(0, |m| m + 1);
+        // `type` is the one field with a safe default; herdr warns about the
+        // missing command until it is filled, which is honest feedback.
+        self.set(&format!("{section}[{next}].type"), Some("\"shell\"".into()));
+    }
+
+    fn remove_entry(&mut self, section: &str, index: usize) {
+        let path = format!("{section}[{index}]");
+        let prefix = format!("{path}.");
+        self.edits.retain(|k, _| !k.starts_with(&prefix));
+        // An entry that was never saved just disappears; one on disk needs an op.
+        if self.saved.keys().any(|k| k.starts_with(&prefix)) {
+            self.removed_entries.insert(path);
+        }
     }
 
     /// Structured rows for a setting, falling back to herdr's default.
@@ -296,6 +388,29 @@ fn to_toml(text: &str, ty: &str) -> Option<String> {
     })
 }
 
+/// A popup dimension carries two TOML types in one field: a percentage is a
+/// string bounded to 1..100, a cell count is a bare integer. herdr rejects
+/// `width = "120"` outright, so the quoting follows what was typed.
+fn size_to_toml(text: &str) -> Result<Option<String>, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    if let Some(pct) = t.strip_suffix('%') {
+        let n: u32 = pct
+            .parse()
+            .map_err(|_| "パーセントは 1% から 100% の範囲です".to_string())?;
+        if !(1..=100).contains(&n) {
+            return Err("パーセントは 1% から 100% の範囲です".into());
+        }
+        return Ok(Some(format!("{t:?}")));
+    }
+    if t.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(Some(t.to_string())); // cells, deliberately unquoted
+    }
+    Err("\"80%\" のようなパーセント、またはセル数の整数を入力してください".into())
+}
+
 fn kind_of(item: &schema::Item) -> &'static str {
     if item.token_set.is_some() {
         "rows"
@@ -329,9 +444,9 @@ fn parse_hex(text: &str) -> Option<slint::Color> {
 }
 
 /// Structured rows for a setting, or an empty model when it holds none.
-fn row_entries(state: &State, item: &schema::Item) -> ModelRc<RowEntry> {
+fn row_entries(state: &State, item: &schema::Item, path: &str) -> ModelRc<RowEntry> {
     let text = state
-        .effective(&item.path)
+        .effective(path)
         .unwrap_or_else(|| item.default.clone());
     let parsed = rows::parse(&text).unwrap_or_default();
     let entries: Vec<RowEntry> = parsed
@@ -424,49 +539,117 @@ fn visible_items(state: &State) -> Vec<&schema::Item> {
         .collect()
 }
 
+/// One row. `path` may differ from the item's own when the item is a template
+/// for an array-of-tables entry.
+fn item_row(state: &State, item: &schema::Item, path: &str, filtering: bool) -> ItemRow {
+        let value = state.effective(path);
+        let swatch = value
+            .as_deref()
+            .or(Some(item.default.as_str()))
+            .and_then(parse_hex);
+        ItemRow {
+            path: path.to_string().into(),
+            key: item.key.clone().into(),
+            doc: [item.doc.join(" "), item.trailing.clone()]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into(),
+            kind: kind_of(item).into(),
+            value: value.as_deref().map(display).unwrap_or_default().into(),
+            default_text: display(&item.default).into(),
+            is_set: value.is_some(),
+            is_dirty: state.is_dirty(path),
+            swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
+            has_swatch: swatch.is_some(),
+            rows: row_entries(state, item, path),
+            is_binding: item.binding_kind.is_some(),
+            // A hit can come from any section, so the key alone would not
+            // say where it lives.
+            label: if filtering {
+                path.to_string()
+            } else {
+                item.key.clone()
+            }
+            .into(),
+            state_label: state.state_label(path).into(),
+            empty_disables: item.empty_disables,
+            enum_values: ModelRc::new(VecModel::from(
+                item.enum_candidates
+                    .iter()
+                    .map(|c| SharedString::from(c.as_str()))
+                    .collect::<Vec<_>>(),
+            )),
+            from_overlay: item.from_overlay,
+            is_size: item.size,
+            key_note: key_note(state, item, path).0.into(),
+            key_level: key_note(state, item, path).1.into(),
+        }
+}
+
+
 fn item_rows(state: &State) -> ModelRc<ItemRow> {
     let filtering = !state.filter.trim().is_empty();
+    // A list section's rows live inside its entries instead.
+    if !filtering && section_is_list(state) {
+        return ModelRc::new(VecModel::from(Vec::<ItemRow>::new()));
+    }
     let rows: Vec<ItemRow> = visible_items(state)
         .into_iter()
-        .map(|item| {
-            let value = state.effective(&item.path);
-            let swatch = value
-                .as_deref()
-                .or(Some(item.default.as_str()))
-                .and_then(parse_hex);
-            ItemRow {
-                path: item.path.clone().into(),
-                key: item.key.clone().into(),
-                doc: [item.doc.join(" "), item.trailing.clone()]
-                    .iter()
-                    .filter(|s| !s.is_empty())
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .into(),
-                kind: kind_of(item).into(),
-                value: value.as_deref().map(display).unwrap_or_default().into(),
-                default_text: display(&item.default).into(),
-                is_set: value.is_some(),
-                is_dirty: state.is_dirty(&item.path),
-                swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
-                has_swatch: swatch.is_some(),
-                rows: row_entries(state, item),
-                is_binding: item.binding_kind.is_some(),
-                // A hit can come from any section, so the key alone would not
-                // say where it lives.
-                label: if filtering {
-                    item.path.clone()
-                } else {
-                    item.key.clone()
-                }
-                .into(),
-                state_label: state.state_label(&item.path).into(),
-                empty_disables: item.empty_disables,
+        .map(|item| item_row(state, item, &item.path, filtering))
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+fn section_is_list(state: &State) -> bool {
+    state
+        .schema
+        .sections
+        .get(state.selected)
+        .is_some_and(|s| s.array_of_tables)
+}
+
+/// One card per `[[section]]` entry, each holding the template's fields at
+/// that entry's index.
+fn entry_cards(state: &State) -> ModelRc<EntryCard> {
+    if !section_is_list(state) || !state.filter.trim().is_empty() {
+        return ModelRc::new(VecModel::from(Vec::<EntryCard>::new()));
+    }
+    let Some(section) = state.schema.sections.get(state.selected) else {
+        return ModelRc::new(VecModel::from(Vec::<EntryCard>::new()));
+    };
+    let cards: Vec<EntryCard> = state
+        .entry_indices(&section.name)
+        .into_iter()
+        .map(|index| {
+            let items: Vec<ItemRow> = section
+                .items
+                .iter()
+                .map(|tpl| {
+                    let path = format!("{}[{index}].{}", section.name, tpl.key);
+                    item_row(state, tpl, &path, false)
+                })
+                .collect();
+            // Whatever identifies the entry, for the card header.
+            let label = ["description", "command", "key"]
+                .iter()
+                .find_map(|k| {
+                    state
+                        .effective(&format!("{}[{index}].{k}", section.name))
+                        .map(|v| display(&v))
+                        .filter(|v| !v.is_empty())
+                })
+                .unwrap_or_else(|| "(未入力)".into());
+            EntryCard {
+                index: index as i32,
+                label: label.into(),
+                items: ModelRc::new(VecModel::from(items)),
             }
         })
         .collect();
-    ModelRc::new(VecModel::from(rows))
+    ModelRc::new(VecModel::from(cards))
 }
 
 fn refresh_picker(app: &App, state: &State) {
@@ -617,6 +800,28 @@ fn refresh_capture(app: &App, state: &State) {
     app.set_capture_recording(c.recording);
 }
 
+/// Terminal-reliability note for a binding, or a validation error when the
+/// value is one herdr would reject.
+fn key_note(state: &State, item: &schema::Item, path: &str) -> (String, &'static str) {
+    let Some(kind) = item.binding_kind else {
+        return (String::new(), "");
+    };
+    let value = display(
+        &state
+            .effective(path)
+            .unwrap_or_else(|| item.default.clone()),
+    );
+    if value.trim().is_empty() {
+        return (String::new(), "");
+    }
+    let errors = keys::validate(&value, kind, item.accepts_range);
+    if let Some(first) = errors.first() {
+        return (first.clone(), "err");
+    }
+    let r = keys::risk(&value, kind);
+    (r.reason.to_string(), r.level)
+}
+
 fn section_title(state: &State) -> String {
     let needle = state.filter.trim();
     if !needle.is_empty() {
@@ -633,9 +838,11 @@ fn section_title(state: &State) -> String {
 fn refresh(app: &App, state: &State) {
     app.set_sections(section_rows(state));
     app.set_items(item_rows(state));
+    app.set_entries(entry_cards(state));
+    app.set_section_is_list(section_is_list(state) && state.filter.trim().is_empty());
     app.set_section_title(section_title(state).into());
     app.set_selected(state.selected as i32);
-    app.set_dirty_count(state.dirty_count() as i32);
+    app.set_dirty_count((state.dirty_count() + state.removed_entries.len()) as i32);
     app.set_allowed_tokens(allowed_tokens(state));
     app.set_filter(state.filter.clone().into());
     refresh_picker(app, state);
@@ -668,6 +875,7 @@ fn main() -> Result<(), slint::PlatformError> {
         picker: None,
         capture: None,
         problems_open: false,
+        removed_entries: Default::default(),
     }));
 
     // Must be selected before any window exists.
@@ -730,8 +938,21 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = app.as_weak();
         app.on_edited(move |path, value| {
             let path = path.to_string();
-            let ty = types.get(&path).cloned().unwrap_or_else(|| "string".into());
-            let next = to_toml(&value, &ty);
+            let is_size = state
+                .borrow()
+                .item(&path)
+                .is_some_and(|i| i.size);
+            let next = if is_size {
+                match size_to_toml(&value) {
+                    Ok(v) => v,
+                    // Keep the previous value rather than writing something
+                    // herdr would refuse.
+                    Err(_) => return,
+                }
+            } else {
+                let ty = types.get(&path).cloned().unwrap_or_else(|| "string".into());
+                to_toml(&value, &ty)
+            };
             state.borrow_mut().set(&path, next);
             let app = weak.unwrap();
             let s = state.borrow();
@@ -1069,10 +1290,49 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = state.clone();
         let weak = app.as_weak();
         app.on_revert(move || {
-            state.borrow_mut().edits.clear();
+            let mut s = state.borrow_mut();
+            s.edits.clear();
+            s.removed_entries.clear();
+            drop(s);
             let app = weak.unwrap();
             refresh(&app, &state.borrow());
             app.set_result("取り消しました".into());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_add_entry(move || {
+            let section = {
+                let s = state.borrow();
+                s.schema
+                    .sections
+                    .get(s.selected)
+                    .map(|x| x.name.clone())
+            };
+            if let Some(section) = section {
+                state.borrow_mut().add_entry(&section);
+            }
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_remove_entry(move |index| {
+            let section = {
+                let s = state.borrow();
+                s.schema
+                    .sections
+                    .get(s.selected)
+                    .map(|x| x.name.clone())
+            };
+            if let Some(section) = section {
+                state.borrow_mut().remove_entry(&section, index.max(0) as usize);
+            }
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
         });
     }
     {
@@ -1131,7 +1391,7 @@ fn main() -> Result<(), slint::PlatformError> {
         app.on_save(move || {
             let edits = state.borrow().edits();
             let app = weak.unwrap();
-            if edits.is_empty() {
+            if edits.is_empty() || !state.borrow().has_pending() {
                 app.set_result("変更はありません".into());
                 return;
             }
@@ -1169,6 +1429,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let cfg = config::load();
             s.saved = cfg.values.into_iter().collect();
             s.edits.clear();
+            s.removed_entries.clear();
             drop(s);
             refresh(&app, &state.borrow());
             app.set_result(text.into());
@@ -1339,5 +1600,59 @@ mod sidebar_tests {
             w = clamp_sidebar(w + 50.0);
         }
         assert_eq!(w, SIDEBAR_MIN + 200.0);
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    #[test]
+    fn a_percentage_is_quoted_and_a_cell_count_is_not() {
+        // herdr: `string sizes must be percentages like 80%; use a number for cells`
+        assert_eq!(size_to_toml("80%").unwrap().as_deref(), Some("\"80%\""));
+        assert_eq!(size_to_toml("120").unwrap().as_deref(), Some("120"));
+        assert_eq!(size_to_toml(" 40 ").unwrap().as_deref(), Some("40"));
+    }
+
+    #[test]
+    fn percentages_outside_one_to_a_hundred_are_refused() {
+        assert!(size_to_toml("0%").is_err());
+        assert!(size_to_toml("200%").is_err());
+        assert_eq!(size_to_toml("1%").unwrap().as_deref(), Some("\"1%\""));
+        assert_eq!(size_to_toml("100%").unwrap().as_deref(), Some("\"100%\""));
+    }
+
+    #[test]
+    fn an_empty_field_still_means_inherit() {
+        assert_eq!(size_to_toml("").unwrap(), None);
+        assert_eq!(size_to_toml("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn anything_that_is_neither_is_refused_rather_than_guessed_at() {
+        for bad in ["big", "80 %", "80px", "-10"] {
+            assert!(size_to_toml(bad).is_err(), "{bad}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod path_helper_tests {
+    use super::*;
+
+    #[test]
+    fn an_index_is_stripped_for_schema_lookups() {
+        assert_eq!(strip_index("keys.command[0].key"), "keys.command.key");
+        assert_eq!(strip_index("theme.name"), "theme.name");
+        assert_eq!(strip_index("keys.command[12].width"), "keys.command.width");
+    }
+
+    #[test]
+    fn the_trailing_index_is_read_back() {
+        assert_eq!(entry_index_of("keys.command[2]"), Some(2));
+        assert_eq!(entry_index_of("keys.command[0]"), Some(0));
+        assert_eq!(entry_index_of("keys.command[0].key"), None, "not an entry path");
+        assert_eq!(entry_index_of("theme.name"), None);
     }
 }

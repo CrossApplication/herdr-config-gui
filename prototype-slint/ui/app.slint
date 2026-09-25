@@ -73,8 +73,23 @@ export struct ItemRow {
     label: string,
     /// `既定` / `設定済み` / `無効` / `未保存`.
     state-label: string,
+    /// Members herdr accepts, when it named them.
+    enum-values: [string],
+    /// Contributed by the overlay, not by `herdr --default-config`.
+    from-overlay: bool,
+    /// A popup dimension: a percentage string or a bare cell count.
+    is-size: bool,
+    /// Terminal-reliability note for a binding, and its level.
+    key-note: string,
+    key-level: string,
     /// True when herdr documents `""` as this setting's off switch.
     empty-disables: bool,
+}
+
+export struct EntryCard {
+    index: int,
+    label: string,
+    items: [ItemRow],
 }
 
 // A chip: the three-state marker from the shipping UI.
@@ -845,6 +860,11 @@ component SettingRow inherits Rectangle {
                 overflow: elide;
             }
 
+            if item.from-overlay: Chip {
+                label: "未文書";
+                tone: #cba6f7;
+            }
+
             Chip {
                 label: item.state-label;
                 tone: item.is-dirty ? Palette.accent
@@ -877,7 +897,16 @@ component SettingRow inherits Rectangle {
                 width: 240px;
             }
 
-            if item.kind != "bool" && item.kind != "rows": LineEdit {
+            if item.enum-values.length > 0 && item.kind != "bool": ComboBox {
+                model: item.enum-values;
+                current-value: item.value;
+                min-width: 160px;
+                max-width: 260px;
+                horizontal-stretch: 1;
+                selected(v) => { root.edited(item.path, v); }
+            }
+
+            if item.enum-values.length == 0 && item.kind != "bool" && item.kind != "rows": LineEdit {
                 text: item.value;
                 placeholder-text: item.default-text == "" ? "(未設定)" : item.default-text;
                 min-width: 160px;
@@ -913,6 +942,26 @@ component SettingRow inherits Rectangle {
                 vertical-alignment: center;
                 min-width: 0px;
                 horizontal-stretch: 2;
+                overflow: elide;
+            }
+        }
+
+        if item.key-note != "": HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Chip {
+                label: item.key-level == "safe" ? "安定"
+                    : item.key-level == "caution" ? "要確認"
+                    : item.key-level == "risky" ? "端末依存" : "エラー";
+                tone: item.key-level == "safe" ? Palette.set
+                    : item.key-level == "caution" ? Palette.warn
+                    : item.key-level == "risky" ? #fab387 : Palette.red;
+            }
+            Text {
+                text: item.key-note;
+                color: item.key-level == "err" ? Palette.red : Palette.dim;
+                font-size: 11px;
+                vertical-alignment: center;
                 overflow: elide;
             }
         }
@@ -981,6 +1030,9 @@ export component App inherits Window {
     in property <int> problem-errors;
     in property <int> problem-warnings;
     in property <bool> problems-open: false;
+    // An array-of-tables section is a list of entries, not a set of settings.
+    in property <bool> section-is-list: false;
+    in property <[EntryCard]> entries;
 
     callback picker-pick-sv(float, float);
     callback picker-pick-hue(float);
@@ -995,6 +1047,8 @@ export component App inherits Window {
     callback open-problems();
     callback close-problems();
     callback problem-goto(string);
+    callback add-entry();
+    callback remove-entry(int);
     callback select-section(int);
     callback edited(string, string);
     callback swatch-clicked(string);
@@ -1154,7 +1208,72 @@ export component App inherits Window {
                         font-family: "Menlo";
                         font-size: 14px;
                     }
-                    for it in items: SettingRow {
+                    if section-is-list: VerticalLayout {
+                        spacing: 10px;
+                        for e in entries: Rectangle {
+                            background: #1e1e2e80;
+                            border-color: Palette.line;
+                            border-width: 1px;
+                            border-radius: 8px;
+                            height: entry.preferred-height;
+
+                            entry := VerticalLayout {
+                                Rectangle {
+                                    height: 30px;
+                                    HorizontalLayout {
+                                        padding-left: 12px;
+                                        padding-right: 12px;
+                                        spacing: 10px;
+                                        Text {
+                                            text: "#" + (e.index + 1);
+                                            color: Palette.accent;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: e.label;
+                                            color: Palette.text;
+                                            font-family: "Menlo";
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Rectangle { }
+                                        GhostButton {
+                                            label: "このエントリを削除";
+                                            tone: Palette.red;
+                                            clicked => { root.remove-entry(e.index); }
+                                        }
+                                    }
+                                    Rectangle { y: parent.height - 1px; height: 1px; background: Palette.line; }
+                                }
+                                for it in e.items: SettingRow {
+                                    item: it;
+                                    allowed: root.allowed-tokens;
+                                    edited(p, v) => { root.edited(p, v); }
+                                    swatch-clicked(p) => { root.swatch-clicked(p); }
+                                    rows-act(p, a, r, i, d) => { root.rows-act(p, a, r, i, d); }
+                                    rows-set-token(p, r, i, v) => { root.rows-set-token(p, r, i, v); }
+                                    rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
+                                    rows-open-fg(p, r, i) => { root.rows-open-fg(p, r, i); }
+                                    record(p) => { root.record(p); }
+                                    revert-one(p) => { root.revert-one(p); }
+                                    disable-one(p) => { root.disable-one(p); }
+                                }
+                            }
+                        }
+                        GhostButton {
+                            label: "＋ エントリを追加";
+                            tone: Palette.accent;
+                            clicked => { root.add-entry(); }
+                        }
+                    }
+
+                    if !section-is-list: VerticalLayout {
+                        spacing: 0px;
+                        alignment: start;
+                        for it in items: SettingRow {
                         item: it;
                         allowed: root.allowed-tokens;
                         edited(p, v) => { root.edited(p, v); }
@@ -1166,6 +1285,7 @@ export component App inherits Window {
                         record(p) => { root.record(p); }
                         revert-one(p) => { root.revert-one(p); }
                         disable-one(p) => { root.disable-one(p); }
+                        }
                     }
                 }
             }
