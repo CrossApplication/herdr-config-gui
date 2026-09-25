@@ -778,12 +778,18 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let state = state.clone();
         let weak = app.as_weak();
-        app.on_capture_pressed(move |key, ctrl, shift, alt, meta| {
+        app.on_capture_pressed(move |key, _slint_ctrl, _slint_shift, _slint_alt, _slint_meta| {
+            // Slint's winit backend swaps Control and Command on Apple
+            // platforms, so its modifiers name the wrong key for a binding
+            // that has to reach a terminal. winit's are taken instead.
+            let m = physical::modifiers();
+            let (ctrl, shift, alt, meta) = (m.ctrl, m.shift, m.alt, m.meta);
             // Raw record of what Slint hands us, so real hardware presses can
             // be compared against what the browser build sees.
             eprintln!(
-                "[key] slint={key:?} physical={:?} codepoints=[{}] ctrl={ctrl} shift={shift} alt={alt} meta={meta}",
+                "[key] slint={key:?} physical={:?} raw={} codepoints=[{}] ctrl={ctrl} shift={shift} alt={alt} meta={meta} (slint said ctrl={_slint_ctrl} meta={_slint_meta})",
                 physical::last(),
+                physical::last_raw(),
                 key.chars()
                     .map(|c| format!("U+{:04X}", c as u32))
                     .collect::<Vec<_>>()

@@ -91,6 +91,31 @@ position of a key" と明記している。ブラウザの `KeyboardEvent` は `
 
 修飾キーは正しく届く。ctrl と cmd が入れ替わるようなことはない。
 
+### Control と Command の入れ替えを打ち消す
+
+Slint の winit バックエンドは **Apple プラットフォームで Control と Command を
+意図的に入れ替える**。
+
+```rust
+// i-slint-backend-winit/winitwindowadapter.rs
+// For now: Match Qt's behavior of mapping command to control and control to meta (LWin/RWin).
+let swap_cmd_ctrl = i_slint_core::is_apple_platform();
+```
+
+自前のショートカットを `Ctrl+C` と書けばどの OS でも期待どおり動く、という一般的な
+アプリには妥当な既定値だが、**キーバインドを記録する用途では有害**。config.toml に
+書くべきは端末が実際に受け取る修飾キーであって、慣習で読み替えた名前ではない。
+放置すると `ctrl+a` の設定が `cmd+a` として保存され、herdr では永久に発火しない。
+
+```
+winit  : ModifiersState(CONTROL)  physical=ControlLeft  logical=Control
+Slint  : ctrl=false  meta=true                          ← ここで入れ替わる
+```
+
+物理キー取得に使っている `CustomApplicationHandler` が入れ替え前の値を受け取るので、
+修飾キーもそこから取る。TS 版（WebView）はこの入れ替えをしないため、**移行で新たに
+生じる差分**だった。
+
 ### 物理キーの取得（解決済み）
 
 Slint の公開 API は論理キーしか渡さないが、**winit は物理キーを持っており、Slint の
