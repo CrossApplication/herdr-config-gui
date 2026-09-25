@@ -116,21 +116,36 @@ component Chip inherits Rectangle {
 component GhostButton inherits Rectangle {
     in property <string> label;
     in property <color> tone: Palette.dim;
+    /// Filled rather than outlined, for the one action a bar is about.
+    in property <bool> filled: false;
+    /// A disabled button says the action is unavailable, which is how the bar
+    /// reports "nothing to save" without a label saying so.
+    in property <bool> enabled: true;
     callback clicked();
-    border-color: touch.has-hover ? tone : Palette.line;
+
+    opacity: enabled ? 1.0 : 0.35;
+    background: filled
+        ? (touch.has-hover && enabled ? tone.brighter(0.2) : tone)
+        : (touch.has-hover && enabled ? #ffffff0d : transparent);
+    border-color: filled ? tone : (touch.has-hover && enabled ? tone : Palette.line);
     border-width: 1px;
-    border-radius: 5px;
-    height: 22px;
-    width: txt.preferred-width + 16px;
+    border-radius: 6px;
+    height: 28px;
+    width: txt.preferred-width + 24px;
     Text {
-        x: 8px;
+        x: 12px;
         text: root.label;
-        color: root.tone;
-        font-size: 11px;
+        color: root.filled ? Palette.bg : root.tone;
+        font-size: 12px;
+        font-weight: root.filled ? 700 : 400;
         vertical-alignment: center;
     }
-    txt := Text { text: root.label; font-size: 11px; visible: false; }
-    touch := TouchArea { clicked => { root.clicked(); } }
+    txt := Text { text: root.label; font-size: 12px; visible: false; }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.not-allowed;
+        clicked => { root.clicked(); }
+    }
 }
 
 component TinyButton inherits Rectangle {
@@ -163,7 +178,7 @@ component TokenLine inherits Rectangle {
     callback set-flag(int, int, string, bool);
     callback open-fg(int, int);
 
-    height: 30px;
+    height: 36px;
     HorizontalLayout {
         padding-left: 10px;
         padding-right: 10px;
@@ -245,7 +260,7 @@ component RowsEditor inherits VerticalLayout {
             spacing: 0px;
 
             Rectangle {
-                height: 28px;
+                height: 34px;
                 HorizontalLayout {
                     padding-left: 10px;
                     padding-right: 10px;
@@ -1102,14 +1117,6 @@ export component App inherits Window {
                     overflow: elide;
                 }
                 GhostButton {
-                    label: problem-errors + problem-warnings > 0
-                        ? "キー設定の問題 " + (problem-errors + problem-warnings)
-                        : "キー設定の問題 なし";
-                    tone: problem-errors > 0 ? Palette.red
-                        : problem-warnings > 0 ? Palette.warn : Palette.dim;
-                    clicked => { open-problems(); }
-                }
-                GhostButton {
                     label: show-about ? "設定に戻る" : "About";
                     tone: Palette.accent;
                     clicked => { toggle-about(); }
@@ -1222,7 +1229,7 @@ export component App inherits Window {
 
                             entry := VerticalLayout {
                                 Rectangle {
-                                    height: 30px;
+                                    height: 38px;
                                     HorizontalLayout {
                                         padding-left: 12px;
                                         padding-right: 12px;
@@ -1296,12 +1303,20 @@ export component App inherits Window {
 
         // ---- save bar ----
         Rectangle {
-            height: 46px;
+            height: 52px;
             background: Palette.panel;
-            Rectangle { height: 1px; background: Palette.line; }
+            // Without an explicit y this lands over the controls instead of
+            // on the boundary with the content above.
+            Rectangle { y: 0; height: 1px; background: Palette.line; }
+
             HorizontalLayout {
                 padding-left: 16px;
                 padding-right: 16px;
+                // Leaves exactly the buttons' own height, so every control in
+                // the row shares one baseline.
+                padding-top: 12px;
+                padding-bottom: 12px;
+                // 52 = 12 + 28 + 12
                 spacing: 10px;
 
                 // The report takes whatever room is left, so the controls sit
@@ -1316,25 +1331,41 @@ export component App inherits Window {
                     overflow: elide;
                 }
 
-                Text {
-                    text: dirty-count > 0 ? dirty-count + " 件の変更" : "変更なし";
-                    color: dirty-count > 0 ? Palette.accent : Palette.dim;
+                // Two different questions, kept side by side rather than in
+                // opposite corners: whether the saved config has a problem,
+                // and whether there is anything not yet saved.
+                GhostButton {
+                    label: problem-errors + problem-warnings > 0
+                        ? "キー設定の問題 " + (problem-errors + problem-warnings)
+                        : "キー設定の問題 なし";
+                    tone: problem-errors > 0 ? Palette.red
+                        : problem-warnings > 0 ? Palette.warn : Palette.dim;
+                    clicked => { open-problems(); }
+                }
+
+                if dirty-count > 0: Text {
+                    text: dirty-count + " 件の変更";
+                    color: Palette.accent;
                     font-size: 12px;
                     vertical-alignment: center;
                     horizontal-alignment: right;
-                    horizontal-stretch: 0;
+                    height: 28px;
                 }
                 GhostButton {
                     label: "すべて取り消し";
+                    enabled: dirty-count > 0;
                     clicked => { revert(); }
                 }
                 GhostButton {
                     label: "差分を確認";
+                    enabled: dirty-count > 0;
                     clicked => { preview(); }
                 }
                 GhostButton {
                     label: "保存して反映";
                     tone: Palette.accent;
+                    filled: true;
+                    enabled: dirty-count > 0;
                     clicked => { save(); }
                 }
             }
