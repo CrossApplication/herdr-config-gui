@@ -24,60 +24,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Tauri links against the system webview; only Linux needs it installed.
+      # Slint's winit backend links against X11/xkb and an OpenGL loader for
+      # the femtovg renderer. macOS and Windows need nothing extra.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            build-essential \
-            file
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
+            libxkbcommon-dev \
+            libfontconfig-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libgl1-mesa-dev \
+            build-essential
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
-      - run: npm ci
+      - name: Format
+        run: cargo fmt --check
 
-      # --- frontend ---
-      - name: Type-check
-        run: npx tsc --noEmit
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
 
-      - name: Frontend tests
-        run: npm test
-
-      - name: Production bundle
-        run: npm run build
-
-      # --- backend ---
       # herdr is not installed on the runners. The schema tests read a
       # committed snapshot of `herdr --default-config`, and the drift check
       # that compares it against a live binary skips itself when herdr is
       # absent. Everything else -- config path resolution per platform, CRLF
-      # handling, minimal-diff writes -- runs everywhere.
-      - name: Rust format
-        working-directory: src-tauri
-        run: cargo fmt --check
-
-      - name: Rust lint
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
+      # handling, minimal-diff writes, key syntax -- runs everywhere.
+      #
       # Single-threaded: one test sets HERDR_CONFIG_PATH process-wide.
-      - name: Rust tests
-        working-directory: src-tauri
+      - name: Tests
         run: cargo test -- --test-threads=1

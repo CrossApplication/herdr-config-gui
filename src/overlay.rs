@@ -186,6 +186,10 @@ pub fn token_set(section: &str, key: &str) -> Option<&'static str> {
 ///
 /// herdr calls an unknown one an "unknown canonical agent id", so this is a
 /// closed set rather than the free-form table it looks like.
+///
+/// Only the tests read it so far -- they ask a live herdr whether every id is
+/// still accepted. The UI for adding an entry is not written yet.
+#[allow(dead_code)]
 pub const ROWS_BY_AGENT_IDS: &[&str] = &[
     "amp", "agy", "claude", "cline", "codex", "copilot", "cursor", "devin", "droid", "gemini",
     "grok", "hermes", "kilo", "kimi", "kiro", "maki", "opencode", "pi", "qwen",
@@ -195,6 +199,7 @@ pub const ROWS_BY_AGENT_IDS: &[&str] = &[
 /// differently: `open_code` and `github_copilot` rather than `opencode` and
 /// `copilot`. Using the wrong spelling is rejected, so the two lists are kept
 /// apart rather than shared.
+#[allow(dead_code)]
 pub const SOUND_AGENT_IDS: &[&str] = &[
     "amp",
     "agy",

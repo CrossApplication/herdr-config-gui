@@ -178,15 +178,6 @@ pub struct Change {
 }
 
 #[derive(Serialize)]
-pub struct Preview {
-    pub changes: Vec<Change>,
-    pub after: String,
-    pub error: Option<String>,
-    /// What herdr says about the candidate content, before anything is written.
-    pub check: Option<CheckReport>,
-}
-
-#[derive(Serialize)]
 pub struct SaveResult {
     pub path: String,
     /// False when the pre-flight check refused the content.
@@ -506,28 +497,6 @@ fn entry_index(path: &str) -> Option<usize> {
     match parse_path(path).ok()?.pop()? {
         Seg::Entry(_, i) => Some(i),
         Seg::Key(_) => None,
-    }
-}
-
-pub fn preview(edits: Vec<Edit>) -> Preview {
-    let state = load();
-    match apply_edits(&state.raw, &edits) {
-        Ok((after, changes)) => {
-            // Ask herdr about the candidate content before anything is written.
-            let check = check::check_toml(&after);
-            Preview {
-                changes,
-                after,
-                error: None,
-                check: Some(check),
-            }
-        }
-        Err(e) => Preview {
-            changes: Vec::new(),
-            after: state.raw,
-            error: Some(e),
-            check: None,
-        },
     }
 }
 

@@ -204,8 +204,19 @@ mod tests {
             | ModifiersState::ALT
             | ModifiersState::SUPER;
         let m: Modifiers = all.into();
-        assert_eq!(m, Modifiers { ctrl: true, shift: true, alt: true, meta: true });
-        assert_eq!(Modifiers::from(ModifiersState::empty()), Modifiers::default());
+        assert_eq!(
+            m,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                alt: true,
+                meta: true
+            }
+        );
+        assert_eq!(
+            Modifiers::from(ModifiersState::empty()),
+            Modifiers::default()
+        );
     }
 
     #[test]

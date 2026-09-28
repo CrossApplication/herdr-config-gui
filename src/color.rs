@@ -93,7 +93,8 @@ pub fn form(text: &str) -> Form {
     // An unknown name may still be valid: herdr's list is not documented, so
     // warning about it would be worse than silence.
     if t.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         Form::Name
     } else {
@@ -104,15 +105,10 @@ pub fn form(text: &str) -> Form {
 /// RGB for the swatch, or None when the value cannot be previewed.
 pub fn to_rgb(text: &str) -> Option<(u8, u8, u8)> {
     let t = text.trim();
-    parse_hex(t)
-        .or_else(|| parse_rgb_call(t))
-        .or_else(|| {
-            let lower = t.to_ascii_lowercase();
-            NAMED
-                .iter()
-                .find(|(n, _)| *n == lower)
-                .map(|(_, rgb)| *rgb)
-        })
+    parse_hex(t).or_else(|| parse_rgb_call(t)).or_else(|| {
+        let lower = t.to_ascii_lowercase();
+        NAMED.iter().find(|(n, _)| *n == lower).map(|(_, rgb)| *rgb)
+    })
 }
 
 pub fn to_hex(r: u8, g: u8, b: u8) -> String {
@@ -202,8 +198,8 @@ mod tests {
         // Every channel of the app's own palette must survive the trip, or
         // opening the picker would shift the colour.
         for hex in [
-            "#11111b", "#181825", "#1e1e2e", "#313244", "#cdd6f4", "#7f849c", "#45475a",
-            "#89b4fa", "#a6e3a1", "#f9e2af", "#f38ba8", "#ffffff", "#000000", "#ff0000",
+            "#11111b", "#181825", "#1e1e2e", "#313244", "#cdd6f4", "#7f849c", "#45475a", "#89b4fa",
+            "#a6e3a1", "#f9e2af", "#f38ba8", "#ffffff", "#000000", "#ff0000",
         ] {
             let (r, g, b) = parse_hex(hex).unwrap();
             let (h, s, v) = rgb_to_hsv(r, g, b);

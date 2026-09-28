@@ -610,7 +610,10 @@ mod tests {
         let prefix = get("keys.prefix");
         assert!(!prefix.enum_strict);
         assert!(prefix.enum_candidates.contains(&"ctrl+b".to_string()));
-        assert!(!get("terminal.new_cwd").enum_strict, "~/Projects is an example");
+        assert!(
+            !get("terminal.new_cwd").enum_strict,
+            "~/Projects is an example"
+        );
         assert!(!get("ui.status_indicators").enum_strict);
     }
 
@@ -723,7 +726,7 @@ mod tests {
             live.replace("\r\n", "\n"),
             FIXTURE.replace("\r\n", "\n"),
             "fixtures/default-config.toml is stale. Refresh it with:\n  \
-             herdr --default-config > src-tauri/fixtures/default-config.toml\n\
+             herdr --default-config > fixtures/default-config.toml\n\
              then update the counts in these tests if the schema really changed."
         );
     }

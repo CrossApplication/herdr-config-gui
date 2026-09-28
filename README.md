@@ -9,32 +9,39 @@ herdr には組み込みの設定画面がないため、設定変更はエデ�
 
 ### 共通の前提
 
-ビルドには Rust (stable) と Node.js 24 以上が必要。加えて OS ごとに以下が要る。
+必要なのは Rust だけ。UI は Slint の DSL から Rust にコンパイルされるので、
+Node.js もシステムの WebView も要らない。Slint 1.18 が Rust **1.92 以上**を要求する。
 
 | OS | 追加で必要なもの |
 | --- | --- |
 | macOS | Xcode Command Line Tools |
-| Linux | `libwebkit2gtk-4.1-dev` `libayatana-appindicator3-dev` `librsvg2-dev` `libxdo-dev` `libssl-dev` `build-essential` |
-| Windows | Visual Studio Build Tools (MSVC)、WebView2 ランタイム (Windows 11 は同梱) |
+| Linux | `libxkbcommon-dev` `libfontconfig-dev` `libxcb-shape0-dev` `libxcb-xfixes0-dev` `libgl1-mesa-dev` `build-essential` |
+| Windows | Visual Studio Build Tools (MSVC) |
 
 ### ソースからビルドする
 
 ```sh
 git clone https://github.com/CrossApplication/herdr-config-gui.git
 cd herdr-config-gui
-npm install
-npm run tauri build
+cargo build --release
 ```
 
-成果物は `src-tauri/target/release/bundle/` の下に出る。
+成果物は単一の実行ファイル `target/release/herdr-config-gui`
+（Windows は `target\release\herdr-config-gui.exe`）。依存する動的ライブラリは
+OS 標準のものだけなので、パスの通った場所に置けばそのまま動く。
 
-| OS | 出力 |
-| --- | --- |
-| macOS | `macos/herdr Config.app`、`dmg/herdr Config_<version>_aarch64.dmg` |
-| Linux | `deb/*.deb`、`appimage/*.AppImage` |
-| Windows | `msi/*.msi`、`nsis/*-setup.exe` |
+アイコンとアプリ名の付いた形式が欲しい場合は [cargo-bundle](https://github.com/burtonageo/cargo-bundle)
+を使う。バンドル定義は `Cargo.toml` の `[package.metadata.bundle]` にある。
 
-macOS で `.app` だけ欲しい場合は `npm run tauri build -- --bundles app`。
+```sh
+cargo install cargo-bundle
+cargo bundle --release                 # その OS で作れるものを全部
+cargo bundle --release --format osx    # 形式を指定する場合
+```
+
+macOS では `target/release/bundle/osx/herdr Config.app` と `dmg/herdr Config.dmg` が出る。
+cargo-bundle は `deb` `rpm` `appimage` `msi` にも対応しているが、**このリポジトリで確認したのは
+macOS の 2 形式だけ**。
 
 ### macOS
 
@@ -51,7 +58,7 @@ Releases の `.deb` または `.AppImage` を使う。署名によるゲート�
 
 ### Windows
 
-Releases の `.msi` または `-setup.exe` を使う。
+Releases の `.msi` を使う。
 
 初回実行時に **SmartScreen の「Windows によって PC が保護されました」** という警告が出る。
 これは署名がないため。「詳細情報」→「実行」で進められる。ブロックではなく警告である。
@@ -81,17 +88,14 @@ Apple がこの回避手段を削ったのは、まさに署名のないアプ�
 想定利用者は herdr を使っている開発者であり、Rust と Node が入っている可能性も高い。
 
 正規の配布には Developer ID Application 証明書が必要で、Apple Developer Program (年 $99) への
-加入が前提になる。これを用意できた時点で方針を変える。Tauri は環境変数を渡すだけで署名と公証まで
-行うため、CI 側の変更はわずかで済む。
+加入が前提になる。これを用意できた時点で方針を変える。cargo-bundle には Tauri のような署名機能が
+ないため、`.app` を作ったあとに自分で署名と公証をかけることになる。
 
-```yaml
-env:
-  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-  APPLE_SIGNING_IDENTITY: "Developer ID Application: ..."
-  APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-  APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-  APPLE_API_KEY_PATH: ${{ runner.temp }}/key.p8
+```sh
+codesign --deep --force --options runtime \
+  --sign "Developer ID Application: ..." "herdr Config.app"
+xcrun notarytool submit "herdr Config.dmg" --keychain-profile ... --wait
+xcrun stapler staple "herdr Config.dmg"
 ```
 
 ### Windows は警告付きで配る
@@ -122,7 +126,7 @@ permissions:
 steps:
   - uses: actions/attest-build-provenance@v3
     with:
-      subject-path: src-tauri/target/release/bundle/**/*
+      subject-path: target/release/bundle/**/*
 ```
 
 利用者側の検証はこうなる。
@@ -209,7 +213,7 @@ enum のメンバーまで報告する。`HERDR_CONFIG_PATH` を一時ファイ�
 ### 手書きのオーバーレイ層
 
 `--default-config` はドキュメントであってスキーマではない。テーブルのメンバーを
-全部並べるのではなく一部を例示する。その穴を `src-tauri/src/overlay.rs` が埋める。
+全部並べるのではなく一部を例示する。その穴を `src/overlay.rs` が埋める。
 
 - `[theme.custom]` と light/dark が受け付けるカラートークン **19 個**
   （`--default-config` の記載は 7 個と 2 個ずつ）
@@ -288,56 +292,54 @@ Windows と Linux では未検証。Windows では `.exe` 付きで
 ## 開発
 
 ```sh
-npm install
-npm run tauri dev        # アプリを起動
-
-npx tsc --noEmit         # 型チェック
-npm test                 # UI ロジックのテスト
-npm run build            # 本番バンドル
-
-cd src-tauri
+cargo run --release              # debug は描画が重いので release 推奨
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test -- --test-threads=1   # HERDR_CONFIG_PATH を書き換えるテストがあるため単一スレッド
 ```
 
-`HERDR_GUI_DUMP=1` を付けて起動すると、UI に渡す JSON を標準出力に吐いて終了する。
 `HERDR_CONFIG_PATH` で編集対象のファイルを差し替えられる。これは herdr 自身の
 環境変数なので、`herdr config check` と `herdr server reload-config` も同じ
 ファイルを対象にする。
 
+ウィンドウを観察できない環境のために、確認用の抜け道を 2 つ残してある。
+
+| 環境変数 | 動作 |
+| --- | --- |
+| `HERDR_GUI_DUMP=1` | ウィンドウを開かず、UI に渡すモデルの中身とカラーピッカーの往復を標準出力に吐いて終了する |
+| `HERDR_GUI_TRACE=1` | 起動 1.5 秒後にウィンドウの実寸・可視状態・スケールを報告して終了する |
+
 ### CI
 
-GitHub Actions が ubuntu / macOS / windows の 3 OS で上記すべてを回す。
+GitHub Actions が ubuntu / macOS / windows の 3 OS で `fmt` / `clippy` / `test` を回す。
 ランナーに herdr は入っていないので、スキーマテストは
-`src-tauri/fixtures/default-config.toml`（`herdr --default-config` のスナップショット）
+`fixtures/default-config.toml`（`herdr --default-config` のスナップショット）
 を読む。herdr が存在する環境では `fixture_matches_installed_herdr` が
 スナップショットのずれを検出し、いない環境では自分でスキップする。
 スナップショットの更新は次のとおり。
 
 ```sh
-herdr --default-config > src-tauri/fixtures/default-config.toml
+herdr --default-config > fixtures/default-config.toml
 ```
 
 ## 構成
 
+単一の Rust クレート。UI は `.slint` で書き、`build.rs` が Rust にコンパイルする。
+
 | ファイル | 役割 |
 | --- | --- |
-| `src-tauri/src/schema.rs` | `--default-config` の行指向パーサ |
-| `src-tauri/src/overlay.rs` | 手書きのオーバーレイ（未文書のキー・カラートークン） |
-| `src-tauri/src/check.rs` | `herdr config check` の実行と診断の解析 |
-| `src-tauri/src/config.rs` | `config.toml` の読み書き（最小差分） |
-| `src-tauri/src/herdr.rs` | herdr バイナリの解決と実行 |
-| `src/state.ts` | 編集状態モデル（DOM 非依存・テスト対象） |
-| `src/keys.ts` | キー構文の正規化・検証・衝突検出（DOM 非依存・テスト対象） |
-| `src/capture.ts` | キー録音モーダル |
-| `src/problems.ts` | 問題一覧パネル |
-| `src/main.ts` | フォーム描画と保存フロー |
-| `src/resizer.ts` | サイドバーのリサイズ |
-| `src/color.ts` | 色値の判定とスウォッチ変換（DOM 非依存・テスト対象） |
-| `src/rows.ts` | サイドバー行のパース・生成・検証（DOM 非依存・テスト対象） |
-| `src/rowsui.ts` | 行エディタの描画と編集操作 |
-| `src-tauri/fixtures/default-config.toml` | `herdr --default-config` のスナップショット（CI 用） |
+| `ui/app.slint` | 画面の定義（フォーム、行エディタ、カラーピッカー、キー録音、各モーダル） |
+| `src/main.rs` | 状態モデル、Slint のモデル構築、全コールバック、保存フロー |
+| `src/schema.rs` | `--default-config` の行指向パーサ |
+| `src/overlay.rs` | 手書きのオーバーレイ（未文書のキー・カラートークン） |
+| `src/check.rs` | `herdr config check` の実行と診断の解析 |
+| `src/config.rs` | `config.toml` の読み書き（最小差分） |
+| `src/herdr.rs` | herdr バイナリの解決と実行 |
+| `src/keys.rs` | キー構文の正規化・検証・衝突検出 |
+| `src/physical.rs` | winit の物理キーと入れ替え前の修飾キーの記録 |
+| `src/color.rs` | 色値の判定と HSV 変換 |
+| `src/rows.rs` | サイドバー行のパース・生成・検証 |
+| `fixtures/default-config.toml` | `herdr --default-config` のスナップショット（CI 用） |
 
 ## キーバインド
 
@@ -346,12 +348,53 @@ prefix キーを実際に押してから目的のキーを押す（ダイアロ�
 認識して `prefix+<chord>` に折り畳む）。Esc と Enter 自体もバインドできるよう、
 録音中は全キーを飲み込み、確定後に Esc = キャンセル / Enter = 確定へ切り替わる。
 
-`KeyboardEvent` の読み方は文字種で変える必要がある。
+### 物理キーと論理キーを使い分ける
+
+打鍵の読み方は文字種で変える必要がある。
 
 | 対象 | 使う値 | 理由 |
 | --- | --- | --- |
-| 英字・数字 | `ev.code` | shift で大文字化し、macOS では alt が合成文字に変える |
-| 記号 | `ev.key` | 端末が送るのは文字そのもの。`shift+7` は `&` として届き、herdr の名前は `ampersand` |
+| 英字・数字・F キー | 物理キー | shift で大文字化し、macOS では alt が合成文字に変える（`option+a` は `å`） |
+| 記号 | 論理キー | 端末が送るのは文字そのもの。`shift+7` は `&` として届き、herdr の名前は `ampersand` |
+
+Slint の公開 API が渡すのは**論理キーと修飾フラグだけ**で、物理キーは捨てられている。
+ただし winit は持っており、Slint の winit バックエンドは横取りを許してくれる。
+
+```rust
+slint::BackendSelector::new()
+    .with_winit_custom_application_handler(PhysicalKeyRecorder)
+    .select()?;
+```
+
+`CustomApplicationHandler` は「Slint が見る前に呼ばれる」と明記されている。押下のたびに
+`winit::event::KeyEvent::physical_key` を記録し、Slint が同じ押下を届けた時点で読み出す。
+`EventResult::Propagate` を返すので Slint 側の処理は変わらない。これに `slint` の
+`unstable-winit-030` feature が要る（unstable の名のとおり、winit のメジャー更新で
+module 名が変わりうる）。
+
+### Control と Command の入れ替えを打ち消す
+
+Slint の winit バックエンドは **Apple プラットフォームで Control と Command を
+意図的に入れ替える**。
+
+```rust
+// i-slint-backend-winit/winitwindowadapter.rs
+// For now: Match Qt's behavior of mapping command to control and control to meta (LWin/RWin).
+let swap_cmd_ctrl = i_slint_core::is_apple_platform();
+```
+
+自前のショートカットを `Ctrl+C` と書けばどの OS でも動く、という一般的なアプリには妥当な
+既定値だが、**キーバインドを記録する用途では有害**。config.toml に書くべきは端末が実際に
+受け取る修飾キーであって、慣習で読み替えた名前ではない。放置すると `ctrl+a` の設定が
+`cmd+a` として保存され、herdr では永久に発火しない。
+
+```
+winit  : ModifiersState(CONTROL)  physical=ControlLeft  logical=Control
+Slint  : ctrl=false  meta=true                          ← ここで入れ替わる
+```
+
+修飾キーも物理キーと同じ `CustomApplicationHandler` から取る。こちらは入れ替え前の値を
+受け取る。
 
 herdr は種別ごとに違う構文規則を持つため、`schema.rs` が各項目を prefix /
 action / navigate / indexed / command に分類し、`1..9` レンジを取るかを記録する。
@@ -371,23 +414,23 @@ navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢�
 
 本体は **BSD-3-Clause**（`LICENSE`）。著作権者は Members Co., Ltd。
 
-依存する Rust クレート 433 件のライセンスを確認したところ、強いコピーレフト
-（GPL / AGPL）は 0 件だった。内訳は `MIT OR Apache-2.0` 系が約 370 件で、
-残りは `Unicode-3.0`、`Zlib OR Apache-2.0 OR MIT` など。`MPL-2.0` が 4 件
-（`cssparser` `selectors` `dtoa-short` `option-ext`）あるが、MPL はファイル単位の
-コピーレフトで、そのファイル自体を改変しない限り本体には波及しない。
+依存する Rust クレート 570 件（全ターゲット分の合計）のライセンスを確認したところ、
+選択の余地なくコピーレフトになるものは 0 件だった。内訳は MIT / Apache-2.0 系が 490 件、
+`Unicode-3.0` が 27 件、`Zlib OR Apache-2.0 OR MIT` が 12 件など。`MPL-2.0` は 0 件
+（Tauri の WebView 経由で入っていた 4 件は Slint 移行で消えた）。LGPL を**選べる**
+ものが 2 件あるが（`r-efi`、`MIT OR Apache-2.0 OR LGPL-2.1-or-later`）、MIT を選べばよい。
 
-### Slint 採用時の追加義務
+### Slint のアトリビューション
 
-UI を Slint へ移行する場合、Slint は 3 択ライセンス
-（`GPL-3.0-only` / `LicenseRef-Slint-Royalty-free-2.0` / 商用）のうち
-**Royalty-free 2.0** を選ぶ。このライセンスは本体のライセンスを縛らないため
+Slint の 14 クレートは 3 択ライセンス
+（`GPL-3.0-only` / `LicenseRef-Slint-Royalty-free-2.0` / `LicenseRef-Slint-Software-3.0`）で、
+このうち **Royalty-free 2.0** を選んでいる。本体のライセンスを縛らないため
 BSD-3-Clause のままでよいが、アトリビューションの表示が要る。
 
-表示方法は 2 択で、**アプリ内の About 画面に `AboutSlint` ウィジェットを置く**方を採る。
-バイナリと一緒に移動するので、GitHub Releases 以外の経路で配布されても義務を満たせる。
-もう一方の「ダウンロードページにバッジを掲載」は、macOS をソース配布にする方針と
-噛み合わず、配布経路ごとに解釈が揺れる。
+表示方法は 2 択で、**アプリ内の About 画面に `AboutSlint` ウィジェットを置く**方を採った
+（画面右下の「About」から開く）。バイナリと一緒に移動するので、GitHub Releases 以外の
+経路で配布されても義務を満たせる。もう一方の「ダウンロードページにバッジを掲載」は、
+macOS をソース配布にする方針と噛み合わず、配布経路ごとに解釈が揺れる。
 
 なお Royalty-free 2.0 は、Slint 単体の配布、組込み機器での使用、Slint の API を
 外部に公開するアプリを禁じているが、いずれも本アプリには該当しない。
@@ -397,21 +440,21 @@ BSD-3-Clause のままでよいが、アトリビューションの表示が要�
 - `[[keys.command]]` エントリの並べ替え（追加・削除・編集は可能）
 - `[ui.sidebar.agents.rows_by_agent]` と `[ui.sound.agents]` への新規キー追加。
   どちらも自由なキーではなく **19 個の正規エージェント ID の集合**で、herdr は
-  未知の名前を拒否する。ID の一覧は取得済み（`overlay::ROWS_BY_AGENT_IDS` /
-  `SOUND_AGENT_IDS`）で UI にも渡しているが、追加する UI はまだない。
+  未知の名前を拒否する。ID の一覧は取得済みで、テストが実機の herdr に問い合わせて
+  固定している（`overlay::ROWS_BY_AGENT_IDS` / `SOUND_AGENT_IDS`）が、
+  追加する UI はまだない。
   なお herdr は同じエージェントを表に応じて別綴りで呼ぶ
   （rows_by_agent は `opencode` / `copilot`、sound は `open_code` / `github_copilot`）
 - `ui.tab_bar_right` は生 TOML 入力のまま。形は判明している
   （`type` は `zoom` `hostname` `datetime` `text` `command`、`text` は `text` フィールド、
   `command` は `command` `interval_seconds` `timeout_seconds`）
 - `experimental.cjk_ime_agents` は生 TOML 入力。herdr 側に検証がなく任意の文字列が通る
-- Linux / Windows は CI でビルドとテストが通ることまでしか確認していない。実機での
-  ウィンドウ描画、キー録音（WebView2 の `KeyboardEvent`、日本語配列の記号キー）、
-  バイナリ探索のフォールバック、インストーラは未検証。
-  `tauri build` によるバンドル生成も macOS (`.app` / `.dmg`) でしか通していない
+- Linux / Windows は実機で一度も動かしていない。ウィンドウ描画、キー録音
+  （winit がどの物理キーを報告するか、日本語配列の記号キー）、バイナリ探索のフォールバック、
+  バンドル生成はいずれも未検証。CI でビルドとテストが通ることまでが現状の確認範囲
 - リリースワークフローが未整備。タグを打っても Releases にビルド済みファイルは付かない
 - 署名は一切していない。macOS の `.app` はリンカによる ad-hoc 署名のみで、
   `spctl` は通らない（ローカルビルドは quarantine が付かないため動作する）
 - `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
-- 依存の `glib 0.18.5` に moderate の脆弱性報告があるが、Tauri の Linux バックエンド
-  (`gtk 0.18` が `glib = "^0.18"` を要求) 経由のため当リポジトリでは上げられない
+- 共有モジュールに残る `#[derive(Serialize)]` は Tauri の JSON IPC 用だったもので、
+  Slint 版では使っていない。外部に出す形式を持たないので消してよい

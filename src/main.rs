@@ -1,21 +1,19 @@
-//! Slint prototype: the same schema and config layers as the shipping app,
-//! with the UI rebuilt in Slint so the two can be compared side by side.
-//!
-//! Deliberately read-only. Edits live in memory and "差分を確認" shows what
-//! would be written; nothing touches config.toml, so running this can never
-//! disturb a real herdr setup.
+//! herdr-config-gui: a form for herdr's config.toml, derived at run time from
+//! `herdr --default-config` and written back with a minimal diff.
 
-// The core modules are shared with the Tauri build rather than copied. None of
-// them depend on tauri, so they compile unchanged here.
-#[path = "../../src-tauri/src/check.rs"]
+/// `herdr config check`, run and its diagnostics parsed.
 mod check;
-#[path = "../../src-tauri/src/config.rs"]
+
+/// Reading and writing config.toml, preserving everything untouched.
 mod config;
-#[path = "../../src-tauri/src/herdr.rs"]
+
+/// Finding and running the herdr binary.
 mod herdr;
-#[path = "../../src-tauri/src/overlay.rs"]
+
+/// Hand-written cover for what `--default-config` documents only by example.
 mod overlay;
-#[path = "../../src-tauri/src/schema.rs"]
+
+/// The line-oriented parser that turns `--default-config` into a schema.
 mod schema;
 
 /// Colour notations and HSV, for the picker.
@@ -27,8 +25,7 @@ mod keys;
 /// The physical key winit knows and Slint discards.
 mod physical;
 
-/// The rows editor's own logic, which has no counterpart in the Tauri build:
-/// there it lives in TypeScript as `src/rows.ts`.
+/// Parsing and generating the sidebar's row definitions.
 mod rows;
 
 use std::cell::RefCell;
@@ -149,8 +146,11 @@ impl State {
 
     /// Everything a save would send.
     fn edits(&self) -> Vec<config::Edit> {
-        let removed_prefixes: Vec<String> =
-            self.removed_entries.iter().map(|p| format!("{p}.")).collect();
+        let removed_prefixes: Vec<String> = self
+            .removed_entries
+            .iter()
+            .map(|p| format!("{p}."))
+            .collect();
         let mut out: Vec<config::Edit> = self
             .edits
             .iter()
@@ -280,7 +280,13 @@ impl State {
         let (h, sa, v) = color::to_rgb(&text)
             .map(|(r, g, b)| color::rgb_to_hsv(r, g, b))
             .unwrap_or((0.0, 0.0, 0.8));
-        self.picker = Some(Picker { target, hue: h, sat: sa, val: v, text });
+        self.picker = Some(Picker {
+            target,
+            hue: h,
+            sat: sa,
+            val: v,
+            text,
+        });
     }
 
     /// Write the picker's current text back to whatever it was opened on.
@@ -338,11 +344,7 @@ impl State {
             .filter_map(|i| {
                 i.binding_kind.map(|kind| keys::Entry {
                     path: i.path.clone(),
-                    value: display(
-                        &self
-                            .effective(&i.path)
-                            .unwrap_or_else(|| i.default.clone()),
-                    ),
+                    value: display(&self.effective(&i.path).unwrap_or_else(|| i.default.clone())),
                     kind: kind.to_string(),
                     accepts_range: i.accepts_range,
                 })
@@ -466,9 +468,11 @@ fn row_entries(state: &State, item: &schema::Item, path: &str) -> ModelRc<RowEnt
                 row.iter()
                     .map(|t| TokenCell {
                         token: t.token.clone().into(),
-                        fg: t.fg.as_deref().and_then(parse_hex).unwrap_or(
-                            slint::Color::from_rgb_u8(205, 214, 244),
-                        ),
+                        fg: t
+                            .fg
+                            .as_deref()
+                            .and_then(parse_hex)
+                            .unwrap_or(slint::Color::from_rgb_u8(205, 214, 244)),
                         has_fg: t.fg.is_some(),
                         bold: t.bold.unwrap_or(false),
                         dim: t.dim.unwrap_or(false),
@@ -488,8 +492,14 @@ fn allowed_tokens(state: &State) -> ModelRc<SharedString> {
         .get(state.selected)
         .and_then(|s| s.items.iter().find_map(|i| i.token_set));
     let mut names: Vec<SharedString> = match set {
-        Some("space") => overlay::SPACE_ROW_TOKENS.iter().map(|s| (*s).into()).collect(),
-        Some(_) => overlay::AGENT_ROW_TOKENS.iter().map(|s| (*s).into()).collect(),
+        Some("space") => overlay::SPACE_ROW_TOKENS
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
+        Some(_) => overlay::AGENT_ROW_TOKENS
+            .iter()
+            .map(|s| (*s).into())
+            .collect(),
         None => Vec::new(),
     };
     if !names.is_empty() {
@@ -543,59 +553,58 @@ fn visible_items(state: &State) -> Vec<&schema::Item> {
 /// One row. `path` may differ from the item's own when the item is a template
 /// for an array-of-tables entry.
 fn item_row(state: &State, item: &schema::Item, path: &str, filtering: bool) -> ItemRow {
-        let value = state.effective(path);
-        let swatch = value
-            .as_deref()
-            .or(Some(item.default.as_str()))
-            .and_then(parse_hex);
-        ItemRow {
-            path: path.to_string().into(),
-            key: item.key.clone().into(),
-            doc: [item.doc.join(" "), item.trailing.clone()]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .into(),
-            kind: kind_of(item).into(),
-            value: value.as_deref().map(display).unwrap_or_default().into(),
-            default_text: display(&item.default).into(),
-            is_set: value.is_some(),
-            is_dirty: state.is_dirty(path),
-            swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
-            has_swatch: swatch.is_some(),
-            rows: row_entries(state, item, path),
-            is_binding: item.binding_kind.is_some(),
-            // A hit can come from any section, so the key alone would not
-            // say where it lives.
-            label: if filtering {
-                path.to_string()
-            } else {
-                item.key.clone()
-            }
+    let value = state.effective(path);
+    let swatch = value
+        .as_deref()
+        .or(Some(item.default.as_str()))
+        .and_then(parse_hex);
+    ItemRow {
+        path: path.to_string().into(),
+        key: item.key.clone().into(),
+        doc: [item.doc.join(" "), item.trailing.clone()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ")
             .into(),
-            state_label: state.state_label(path).into(),
-            empty_disables: item.empty_disables,
-            // Only a verified set reaches the form. Prose-scraped literals are
-            // examples, and the documentation line below the field already
-            // lists them.
-            enum_values: ModelRc::new(VecModel::from(if item.enum_strict {
-                item.enum_candidates
-                    .iter()
-                    .map(|c| SharedString::from(c.as_str()))
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            })),
-            enum_strict: item.enum_strict,
-            from_overlay: item.from_overlay,
-            is_size: item.size,
-            key_note: key_note(state, item, path).0.into(),
-            key_level: key_note(state, item, path).1.into(),
+        kind: kind_of(item).into(),
+        value: value.as_deref().map(display).unwrap_or_default().into(),
+        default_text: display(&item.default).into(),
+        is_set: value.is_some(),
+        is_dirty: state.is_dirty(path),
+        swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
+        has_swatch: swatch.is_some(),
+        rows: row_entries(state, item, path),
+        is_binding: item.binding_kind.is_some(),
+        // A hit can come from any section, so the key alone would not
+        // say where it lives.
+        label: if filtering {
+            path.to_string()
+        } else {
+            item.key.clone()
         }
+        .into(),
+        state_label: state.state_label(path).into(),
+        empty_disables: item.empty_disables,
+        // Only a verified set reaches the form. Prose-scraped literals are
+        // examples, and the documentation line below the field already
+        // lists them.
+        enum_values: ModelRc::new(VecModel::from(if item.enum_strict {
+            item.enum_candidates
+                .iter()
+                .map(|c| SharedString::from(c.as_str()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        })),
+        enum_strict: item.enum_strict,
+        from_overlay: item.from_overlay,
+        is_size: item.size,
+        key_note: key_note(state, item, path).0.into(),
+        key_level: key_note(state, item, path).1.into(),
+    }
 }
-
 
 fn item_rows(state: &State) -> ModelRc<ItemRow> {
     let filtering = !state.filter.trim().is_empty();
@@ -669,7 +678,9 @@ fn refresh_picker(app: &App, state: &State) {
     let allow_reset = matches!(&p.target, PickerTarget::Item(_));
     let note = match color::form(&p.text) {
         color::Form::Malformed => "色として解釈できません".to_string(),
-        color::Form::Name if !allow_reset => "行のスタイルは #rgb / #rrggbb のみ受け付けます".into(),
+        color::Form::Name if !allow_reset => {
+            "行のスタイルは #rgb / #rrggbb のみ受け付けます".into()
+        }
         color::Form::Rgb if !allow_reset => "行のスタイルは #rgb / #rrggbb のみ受け付けます".into(),
         color::Form::Name => "名前付き色（herdr は検証しません）".into(),
         _ => String::new(),
@@ -679,7 +690,9 @@ fn refresh_picker(app: &App, state: &State) {
     app.set_picker_title(
         match &p.target {
             PickerTarget::Item(path) => path.clone(),
-            PickerTarget::RowFg(path, r, i) => format!("{path} — {} 行目 {} 番目 の fg", r + 1, i + 1),
+            PickerTarget::RowFg(path, r, i) => {
+                format!("{path} — {} 行目 {} 番目 の fg", r + 1, i + 1)
+            }
         }
         .into(),
     );
@@ -947,10 +960,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = app.as_weak();
         app.on_edited(move |path, value| {
             let path = path.to_string();
-            let is_size = state
-                .borrow()
-                .item(&path)
-                .is_some_and(|i| i.size);
+            let is_size = state.borrow().item(&path).is_some_and(|i| i.size);
             let next = if is_size {
                 match size_to_toml(&value) {
                     Ok(v) => v,
@@ -1314,10 +1324,7 @@ fn main() -> Result<(), slint::PlatformError> {
         app.on_add_entry(move || {
             let section = {
                 let s = state.borrow();
-                s.schema
-                    .sections
-                    .get(s.selected)
-                    .map(|x| x.name.clone())
+                s.schema.sections.get(s.selected).map(|x| x.name.clone())
             };
             if let Some(section) = section {
                 state.borrow_mut().add_entry(&section);
@@ -1332,13 +1339,12 @@ fn main() -> Result<(), slint::PlatformError> {
         app.on_remove_entry(move |index| {
             let section = {
                 let s = state.borrow();
-                s.schema
-                    .sections
-                    .get(s.selected)
-                    .map(|x| x.name.clone())
+                s.schema.sections.get(s.selected).map(|x| x.name.clone())
             };
             if let Some(section) = section {
-                state.borrow_mut().remove_entry(&section, index.max(0) as usize);
+                state
+                    .borrow_mut()
+                    .remove_entry(&section, index.max(0) as usize);
             }
             let app = weak.unwrap();
             refresh(&app, &state.borrow());
@@ -1470,17 +1476,18 @@ fn main() -> Result<(), slint::PlatformError> {
                         .map(|c| DiffRow {
                             action: c.action.into(),
                             path: c.path.clone().into(),
-                            from: c
-                                .from
-                                .clone()
-                                .unwrap_or_else(|| "(既定)".into())
-                                .into(),
+                            from: c.from.clone().unwrap_or_else(|| "(既定)".into()).into(),
                             to: c.to.clone().unwrap_or_else(|| "(既定に戻す)".into()).into(),
                         })
                         .collect();
                     app.set_diff_rows(ModelRc::new(VecModel::from(rows)));
                     app.set_diff_check(
-                        if report.ok { String::new() } else { report.raw.clone() }.into(),
+                        if report.ok {
+                            String::new()
+                        } else {
+                            report.raw.clone()
+                        }
+                        .into(),
                     );
                     app.set_diff_check_ok(report.ok);
                     app.set_diff_fatal(report.fatal());
@@ -1515,7 +1522,7 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    if std::env::var_os("PROTO_DUMP").is_some() {
+    if std::env::var_os("HERDR_GUI_DUMP").is_some() {
         // Evidence that the models really carry the config, for environments
         // where the window cannot be inspected.
         use slint::Model;
@@ -1562,14 +1569,20 @@ fn main() -> Result<(), slint::PlatformError> {
             println!("HSV(0.5,1,1)  : {}", st.picker.as_ref().unwrap().text);
             println!("  書き込み値   : {:?}", st.effective("theme.custom.accent"));
             st.picker_text("cyan".into());
-            println!("テキスト cyan  : hue={:.3} 書き込み値={:?}",
-                st.picker.as_ref().unwrap().hue, st.effective("theme.custom.accent"));
+            println!(
+                "テキスト cyan  : hue={:.3} 書き込み値={:?}",
+                st.picker.as_ref().unwrap().hue,
+                st.effective("theme.custom.accent")
+            );
             st.picker_text("reset".into());
             println!("reset          : {:?}", st.effective("theme.custom.accent"));
 
             st.open_picker(PickerTarget::RowFg("ui.sidebar.agents.rows".into(), 0, 0));
             st.picker_hsv(0.0, 1.0, 1.0);
-            println!("行 fg          : {:?}", st.effective("ui.sidebar.agents.rows"));
+            println!(
+                "行 fg          : {:?}",
+                st.effective("ui.sidebar.agents.rows")
+            );
         }
         let s = state.borrow();
         let colors = s
@@ -1583,7 +1596,7 @@ fn main() -> Result<(), slint::PlatformError> {
         return Ok(());
     }
 
-    if std::env::var_os("PROTO_TRACE").is_some() {
+    if std::env::var_os("HERDR_GUI_TRACE").is_some() {
         // Report what the window actually is, from inside the event loop.
         let weak = app.as_weak();
         let timer = slint::Timer::default();
@@ -1618,8 +1631,16 @@ mod sidebar_tests {
     #[test]
     fn the_sidebar_stays_within_its_bounds() {
         assert_eq!(clamp_sidebar(300.0), 300.0);
-        assert_eq!(clamp_sidebar(20.0), SIDEBAR_MIN, "the handle must stay reachable");
-        assert_eq!(clamp_sidebar(9999.0), SIDEBAR_MAX, "the sidebar must not swallow the pane");
+        assert_eq!(
+            clamp_sidebar(20.0),
+            SIDEBAR_MIN,
+            "the handle must stay reachable"
+        );
+        assert_eq!(
+            clamp_sidebar(9999.0),
+            SIDEBAR_MAX,
+            "the sidebar must not swallow the pane"
+        );
         assert_eq!(clamp_sidebar(SIDEBAR_DEFAULT), SIDEBAR_DEFAULT);
     }
 
@@ -1687,7 +1708,11 @@ mod path_helper_tests {
     fn the_trailing_index_is_read_back() {
         assert_eq!(entry_index_of("keys.command[2]"), Some(2));
         assert_eq!(entry_index_of("keys.command[0]"), Some(0));
-        assert_eq!(entry_index_of("keys.command[0].key"), None, "not an entry path");
+        assert_eq!(
+            entry_index_of("keys.command[0].key"),
+            None,
+            "not an entry path"
+        );
         assert_eq!(entry_index_of("theme.name"), None);
     }
 }

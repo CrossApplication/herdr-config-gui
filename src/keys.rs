@@ -48,7 +48,9 @@ const KEY_ALIASES: &[(&str, &str)] = &[
     ("spacebar", "space"),
 ];
 
-const NAMED: &[&str] = &["enter", "tab", "esc", "left", "right", "up", "down", "space"];
+const NAMED: &[&str] = &[
+    "enter", "tab", "esc", "left", "right", "up", "down", "space",
+];
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Chord {
@@ -83,10 +85,9 @@ pub fn parse(text: &str) -> Option<Chord> {
         return None;
     }
     // A trailing `+` can only be the plus key; herdr names it `plus`.
-    let raw = if t.ends_with('+') {
-        format!("{}+plus", &t[..t.len() - 1])
-    } else {
-        t.to_string()
+    let raw = match t.strip_suffix('+') {
+        Some(head) => format!("{head}+plus"),
+        None => t.to_string(),
     };
 
     let mut prefix = false;
@@ -256,9 +257,7 @@ pub fn with_prefix(chord: &str) -> String {
 // --- validation ------------------------------------------------------------
 
 fn is_fn_key(k: &str) -> bool {
-    k.len() > 1
-        && k.starts_with('f')
-        && k[1..].parse::<u32>().is_ok_and(|n| (1..=24).contains(&n))
+    k.len() > 1 && k.starts_with('f') && k[1..].parse::<u32>().is_ok_and(|n| (1..=24).contains(&n))
 }
 
 fn is_named_punct(k: &str) -> bool {
@@ -317,7 +316,10 @@ pub fn validate(text: &str, kind: &str, accepts_range: bool) -> Vec<String> {
             }
         }
         _ => {
-            if !p.prefix && p.mods.is_empty() && !is_fn_key(&p.key) && !NAMED.contains(&p.key.as_str())
+            if !p.prefix
+                && p.mods.is_empty()
+                && !is_fn_key(&p.key)
+                && !NAMED.contains(&p.key.as_str())
             {
                 errors.push(
                     "修飾キーなしの直接バインドは通常の入力を奪うため使えません。prefix+ を付けてください"
@@ -384,7 +386,10 @@ pub fn risk(text: &str, kind: &str) -> Risk {
     if p.mods.is_empty() {
         return mk("risky", "修飾キーなしの直接バインドは通常の入力を奪います");
     }
-    mk("caution", "明示的な修飾チョード。端末で実際に届くか確認してください")
+    mk(
+        "caution",
+        "明示的な修飾チョード。端末で実際に届くか確認してください",
+    )
 }
 
 // --- conflicts -------------------------------------------------------------
@@ -524,11 +529,25 @@ mod tests {
     use super::*;
 
     fn raw(key: &str, ctrl: bool, shift: bool, alt: bool, meta: bool) -> RawKey {
-        RawKey { key: key.into(), physical: None, ctrl, shift, alt, meta }
+        RawKey {
+            key: key.into(),
+            physical: None,
+            ctrl,
+            shift,
+            alt,
+            meta,
+        }
     }
 
     /// The same press, with the physical key winit supplies.
-    fn raw_phys(key: &str, physical: &str, ctrl: bool, shift: bool, alt: bool, meta: bool) -> RawKey {
+    fn raw_phys(
+        key: &str,
+        physical: &str,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+        meta: bool,
+    ) -> RawKey {
         RawKey {
             key: key.into(),
             physical: Some(physical.into()),
@@ -541,7 +560,10 @@ mod tests {
 
     #[test]
     fn a_plain_chord_is_captured() {
-        assert_eq!(from_event(&raw("b", true, false, false, false), true).unwrap(), "ctrl+b");
+        assert_eq!(
+            from_event(&raw("b", true, false, false, false), true).unwrap(),
+            "ctrl+b"
+        );
     }
 
     #[test]
@@ -557,28 +579,54 @@ mod tests {
     fn a_symbol_already_carries_its_shift() {
         // shift+7 sends `&`, which herdr names `ampersand`. Reporting shift as
         // well would describe a chord no terminal sends.
-        assert_eq!(from_event(&raw("&", false, true, false, false), true).unwrap(), "ampersand");
-        assert_eq!(from_event(&raw("-", false, false, false, false), true).unwrap(), "minus");
-        assert_eq!(from_event(&raw("|", false, true, false, false), true).unwrap(), "|");
+        assert_eq!(
+            from_event(&raw("&", false, true, false, false), true).unwrap(),
+            "ampersand"
+        );
+        assert_eq!(
+            from_event(&raw("-", false, false, false, false), true).unwrap(),
+            "minus"
+        );
+        assert_eq!(
+            from_event(&raw("|", false, true, false, false), true).unwrap(),
+            "|"
+        );
     }
 
     #[test]
     fn named_keys_pass_through_lowercased() {
-        for (input, want) in [("esc", "esc"), ("enter", "enter"), ("left", "left"), ("f12", "f12")] {
-            assert_eq!(from_event(&raw(input, false, false, false, false), true).unwrap(), want);
+        for (input, want) in [
+            ("esc", "esc"),
+            ("enter", "enter"),
+            ("left", "left"),
+            ("f12", "f12"),
+        ] {
+            assert_eq!(
+                from_event(&raw(input, false, false, false, false), true).unwrap(),
+                want
+            );
         }
     }
 
     #[test]
     fn meta_is_cmd_on_macos_and_super_elsewhere() {
-        assert_eq!(from_event(&raw("k", false, false, false, true), true).unwrap(), "cmd+k");
-        assert_eq!(from_event(&raw("k", false, false, false, true), false).unwrap(), "super+k");
+        assert_eq!(
+            from_event(&raw("k", false, false, false, true), true).unwrap(),
+            "cmd+k"
+        );
+        assert_eq!(
+            from_event(&raw("k", false, false, false, true), false).unwrap(),
+            "super+k"
+        );
     }
 
     #[test]
     fn a_modifier_alone_keeps_the_capture_waiting() {
         for m in ["shift", "ctrl", "alt", "cmd", ""] {
-            assert!(from_event(&raw(m, false, false, false, false), true).is_none(), "{m}");
+            assert!(
+                from_event(&raw(m, false, false, false, false), true).is_none(),
+                "{m}"
+            );
         }
     }
 
@@ -595,7 +643,10 @@ mod tests {
         // Slint alone reports `a-ring` for option+a and cannot get back to
         // `a`. winit's physical key can, which is what the browser build does
         // with ev.code.
-        assert_eq!(from_event(&raw("å", false, false, true, false), true).unwrap(), "alt+å");
+        assert_eq!(
+            from_event(&raw("å", false, false, true, false), true).unwrap(),
+            "alt+å"
+        );
         assert_eq!(
             from_event(&raw_phys("å", "a", false, false, true, false), true).unwrap(),
             "alt+a"
@@ -610,8 +661,14 @@ mod tests {
             from_event(&raw_phys("R", "r", true, true, false, false), true).unwrap(),
             "ctrl+shift+r"
         );
-        assert_eq!(from_event(&raw_phys("1", "1", true, false, false, false), true).unwrap(), "ctrl+1");
-        assert_eq!(from_event(&raw_phys("f12", "f12", false, false, false, false), true).unwrap(), "f12");
+        assert_eq!(
+            from_event(&raw_phys("1", "1", true, false, false, false), true).unwrap(),
+            "ctrl+1"
+        );
+        assert_eq!(
+            from_event(&raw_phys("f12", "f12", false, false, false, false), true).unwrap(),
+            "f12"
+        );
     }
 
     #[test]
@@ -639,24 +696,45 @@ mod tests {
     #[test]
     fn real_macos_key_presses_produce_the_right_chords() {
         // Slint reports ctrl as ctrl and cmd as cmd: they are not swapped.
-        assert_eq!(from_event(&raw("a", true, false, false, false), true).unwrap(), "ctrl+a");
-        assert_eq!(from_event(&raw("a", false, false, false, true), true).unwrap(), "cmd+a");
+        assert_eq!(
+            from_event(&raw("a", true, false, false, false), true).unwrap(),
+            "ctrl+a"
+        );
+        assert_eq!(
+            from_event(&raw("a", false, false, false, true), true).unwrap(),
+            "cmd+a"
+        );
         // A modifier arrives as its own press first, and must not end capture.
         for m in ["ctrl", "cmd", "alt", "shift"] {
-            assert!(from_event(&raw(m, false, false, false, false), true).is_none(), "{m}");
+            assert!(
+                from_event(&raw(m, false, false, false, false), true).is_none(),
+                "{m}"
+            );
         }
         // shift+7 on a US layout.
-        assert_eq!(from_event(&raw("&", false, true, false, false), true).unwrap(), "ampersand");
+        assert_eq!(
+            from_event(&raw("&", false, true, false, false), true).unwrap(),
+            "ampersand"
+        );
         // cmd+shift+r, which is what gets sent when reaching for ctrl+shift+r.
         assert_eq!(
             from_event(&raw("R", false, true, false, true), true).unwrap(),
             "shift+cmd+r"
         );
         // Function keys and escape resolve through Slint's Key constants.
-        assert_eq!(from_event(&raw("f12", false, false, false, false), true).unwrap(), "f12");
-        assert_eq!(from_event(&raw("esc", false, false, false, false), true).unwrap(), "esc");
+        assert_eq!(
+            from_event(&raw("f12", false, false, false, false), true).unwrap(),
+            "f12"
+        );
+        assert_eq!(
+            from_event(&raw("esc", false, false, false, false), true).unwrap(),
+            "esc"
+        );
         // The one thing that cannot be recovered without a physical key.
-        assert_eq!(from_event(&raw("å", false, false, true, false), true).unwrap(), "alt+å");
+        assert_eq!(
+            from_event(&raw("å", false, false, true, false), true).unwrap(),
+            "alt+å"
+        );
     }
 
     #[test]
@@ -685,7 +763,10 @@ mod syntax_tests {
         }
     }
     fn ranged(path: &str, value: &str) -> Entry {
-        Entry { accepts_range: true, ..entry(path, value, "action") }
+        Entry {
+            accepts_range: true,
+            ..entry(path, value, "action")
+        }
     }
 
     // --- parsing -----------------------------------------------------------
@@ -900,7 +981,10 @@ mod syntax_tests {
         ]);
         assert_eq!(ps.len(), 1);
         assert_eq!(ps[0].kind, "conflict");
-        assert_eq!(ps[0].paths, ["keys.workspace_picker", "keys.next_workspace"]);
+        assert_eq!(
+            ps[0].paths,
+            ["keys.workspace_picker", "keys.next_workspace"]
+        );
         assert_eq!(ps[0].scope, Some("global"));
     }
 
@@ -916,9 +1000,7 @@ mod syntax_tests {
     /// Every binding herdr ships must pass, or the rules are too strict.
     #[test]
     fn the_bindings_herdr_ships_raise_no_problems() {
-        let schema = crate::schema::build(include_str!(
-            "../../src-tauri/fixtures/default-config.toml"
-        ));
+        let schema = crate::schema::build(include_str!("../fixtures/default-config.toml"));
         let bindings: Vec<Entry> = schema
             .sections
             .iter()
