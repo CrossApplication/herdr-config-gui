@@ -28,6 +28,9 @@ mod physical;
 /// Parsing and generating the sidebar's row definitions.
 mod rows;
 
+/// Parsing and generating the tab bar's right-hand status entries.
+mod tabbar;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -262,6 +265,15 @@ impl State {
         rows::parse(&text).unwrap_or_default()
     }
 
+    /// Structured tab bar entries for a setting, falling back to the default.
+    fn tabbar_of(&self, path: &str) -> tabbar::Entries {
+        let text = self
+            .effective(path)
+            .or_else(|| self.item(path).map(|i| i.default.clone()))
+            .unwrap_or_default();
+        tabbar::parse(&text).unwrap_or_default()
+    }
+
     /// Open the picker on a setting, seeded from whatever it holds now.
     fn open_picker(&mut self, target: PickerTarget) {
         let text = match &target {
@@ -414,9 +426,15 @@ fn size_to_toml(text: &str) -> Result<Option<String>, String> {
     Err("\"80%\" のようなパーセント、またはセル数の整数を入力してください".into())
 }
 
-fn kind_of(item: &schema::Item) -> &'static str {
+/// `ui.tab_bar_right` is herdr's only list of inline tables, so the editor for
+/// it is chosen by path rather than by a schema flag. A value the editor cannot
+/// represent keeps the raw TOML field instead of being rewritten from a
+/// half-matched structure.
+fn kind_of(state: &State, item: &schema::Item, path: &str) -> &'static str {
     if item.token_set.is_some() {
         "rows"
+    } else if path == TAB_BAR_RIGHT && tabbar_value(state, item, path).is_some() {
+        "tabbar"
     } else if item.color {
         "color"
     } else if item.ty == "bool" {
@@ -479,6 +497,46 @@ fn row_entries(state: &State, item: &schema::Item, path: &str) -> ModelRc<RowEnt
                     })
                     .collect::<Vec<_>>(),
             )),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(entries))
+}
+
+/// The one setting the tab bar editor applies to.
+const TAB_BAR_RIGHT: &str = "ui.tab_bar_right";
+
+/// The entries as the editor understands them, or None when the value is a
+/// shape it cannot represent.
+fn tabbar_value(state: &State, item: &schema::Item, path: &str) -> Option<tabbar::Entries> {
+    let text = state
+        .effective(path)
+        .unwrap_or_else(|| item.default.clone());
+    tabbar::parse(&text)
+}
+
+fn tabbar_entries(state: &State, item: &schema::Item, path: &str) -> ModelRc<TabBarEntry> {
+    let parsed = tabbar_value(state, item, path).unwrap_or_default();
+    let entries: Vec<TabBarEntry> = parsed
+        .iter()
+        .map(|e| TabBarEntry {
+            ty: e.ty.clone().into(),
+            format: e.format.clone().into(),
+            text: e.text.clone().into(),
+            command: e.command.clone().into(),
+            // An absent field and a zero are different to herdr, so an unset
+            // one shows as an empty box rather than as 0.
+            interval: e
+                .interval_seconds
+                .map(|n| n.to_string())
+                .unwrap_or_default()
+                .into(),
+            timeout: e
+                .timeout_seconds
+                .map(|n| n.to_string())
+                .unwrap_or_default()
+                .into(),
+            preview: tabbar::preview(e).into(),
+            problem: tabbar::problem(e).unwrap_or_default().into(),
         })
         .collect();
     ModelRc::new(VecModel::from(entries))
@@ -568,7 +626,7 @@ fn item_row(state: &State, item: &schema::Item, path: &str, filtering: bool) -> 
             .collect::<Vec<_>>()
             .join(" ")
             .into(),
-        kind: kind_of(item).into(),
+        kind: kind_of(state, item, path).into(),
         value: value.as_deref().map(display).unwrap_or_default().into(),
         default_text: display(&item.default).into(),
         is_set: value.is_some(),
@@ -576,6 +634,7 @@ fn item_row(state: &State, item: &schema::Item, path: &str, filtering: bool) -> 
         swatch: swatch.unwrap_or(slint::Color::from_rgb_u8(30, 30, 46)),
         has_swatch: swatch.is_some(),
         rows: row_entries(state, item, path),
+        tabbar: tabbar_entries(state, item, path),
         is_binding: item.binding_kind.is_some(),
         // A hit can come from any section, so the key alone would not
         // say where it lives.
@@ -1010,6 +1069,73 @@ fn main() -> Result<(), slint::PlatformError> {
                 _ => return,
             }
             let next = rows::to_toml(&rs);
+            s.set(&path, Some(next));
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_tabbar_act(move |path, action, index, delta| {
+            let path = path.to_string();
+            let (i, d) = (index.max(0) as usize, delta as isize);
+            let mut s = state.borrow_mut();
+            let mut es = s.tabbar_of(&path);
+            match action.as_str() {
+                // `zoom` needs no fields, so a new entry is valid immediately.
+                "add" => es.push(tabbar::Entry {
+                    ty: tabbar::TYPES[0].to_string(),
+                    ..Default::default()
+                }),
+                "del" if i < es.len() => {
+                    es.remove(i);
+                }
+                "move" => tabbar::move_entry(&mut es, i, d),
+                _ => return,
+            }
+            let next = tabbar::to_toml(&es);
+            s.set(&path, Some(next));
+            drop(s);
+            let app = weak.unwrap();
+            refresh(&app, &state.borrow());
+        });
+    }
+    {
+        let state = state.clone();
+        let weak = app.as_weak();
+        app.on_tabbar_set(move |path, index, field, value| {
+            let path = path.to_string();
+            let i = index.max(0) as usize;
+            let mut s = state.borrow_mut();
+            let mut es = s.tabbar_of(&path);
+            let Some(e) = es.get_mut(i) else { return };
+            let value = value.to_string();
+            match field.as_str() {
+                "type" if tabbar::TYPES.contains(&value.as_str()) => e.ty = value,
+                "format" => e.format = value,
+                "text" => e.text = value,
+                "command" => e.command = value,
+                // An empty box clears the field; anything that is not a number
+                // is not applied, and the box snaps back on the next refresh.
+                "interval" | "timeout" => {
+                    let n = if value.trim().is_empty() {
+                        None
+                    } else if let Ok(n) = value.trim().parse::<u64>() {
+                        Some(n)
+                    } else {
+                        return;
+                    };
+                    if field == "interval" {
+                        e.interval_seconds = n;
+                    } else {
+                        e.timeout_seconds = n;
+                    }
+                }
+                _ => return,
+            }
+            let next = tabbar::to_toml(&es);
             s.set(&path, Some(next));
             drop(s);
             let app = weak.unwrap();
@@ -1583,6 +1709,28 @@ fn main() -> Result<(), slint::PlatformError> {
                 "行 fg          : {:?}",
                 st.effective("ui.sidebar.agents.rows")
             );
+        }
+        // `ui.tab_bar_right` decides between a structured editor and the raw
+        // TOML field by whether the current value parses, so report both.
+        {
+            let s = state.borrow();
+            if let Some(item) = s.item(TAB_BAR_RIGHT).cloned() {
+                let row = item_row(&s, &item, TAB_BAR_RIGHT, false);
+                println!(
+                    "tab_bar_right : kind={} 項目数={} 値={}",
+                    row.kind,
+                    row.tabbar.row_count(),
+                    s.effective(TAB_BAR_RIGHT)
+                        .unwrap_or_else(|| "(既定)".into())
+                );
+                for e in s.tabbar_of(TAB_BAR_RIGHT) {
+                    println!(
+                        "  - {:<28} {}",
+                        tabbar::preview(&e),
+                        tabbar::problem(&e).unwrap_or_default()
+                    );
+                }
+            }
         }
         let s = state.borrow();
         let colors = s

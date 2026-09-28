@@ -272,6 +272,32 @@ herdr は `width = "120"` を拒否するため、入力に応じてクォート
 パースは意図的に狭く作ってある。エディタが表現できない書き方だった場合は構造を推測せず、
 生の TOML 入力にフォールバックする。半分だけ理解した値を書き換えるより安全なため。
 
+### タブバーの項目は herdr に形を聞いて組み立てる
+
+`ui.tab_bar_right` はインラインテーブルの配列で、`--default-config` は
+`tab_bar_right = []` と型の名前だけを書き、各型が取るフィールドには触れていない。
+そこで `config check` に未知のフィールドを渡して名前を吐かせた。
+
+```
+unknown field `zzz`, expected one of `command`, `interval_seconds`, `timeout_seconds`
+```
+
+| type | フィールド | 必須 |
+| --- | --- | --- |
+| `zoom` / `hostname` | なし | |
+| `datetime` | `format` (string) | |
+| `text` | `text` (string) | ✓ |
+| `command` | `command` (string) | ✓ |
+| | `interval_seconds` / `timeout_seconds` (u64、1 以上) | |
+
+型ごとの必須フィールドが欠けていると **herdr は設定ファイル全体を破棄する**
+（`missing field \`text\``）。一方、値が空だったり `interval_seconds = 0` だったりする場合は
+その項目だけを隠して残りは有効にする。そのため編集器は入力途中の項目でも
+`text = ""` の形で書き出し、破棄される状態を作らない。隠される条件は警告として画面に出す。
+
+`zoom` と `hostname` は余計なフィールドを黙って無視するが、編集器にはそれを置く場所がない。
+保存時に黙って消すよりは生の TOML 入力に落ちるほうが安全なので、パースを拒否している。
+
 ### 行末を保持する
 
 `toml_edit` は文書を描画するとき改行をすべて LF に正規化する。CRLF のファイルを
@@ -339,6 +365,7 @@ herdr --default-config > fixtures/default-config.toml
 | `src/physical.rs` | winit の物理キーと入れ替え前の修飾キーの記録 |
 | `src/color.rs` | 色値の判定と HSV 変換 |
 | `src/rows.rs` | サイドバー行のパース・生成・検証 |
+| `src/tabbar.rs` | タブバー右端の項目のパース・生成・検証 |
 | `fixtures/default-config.toml` | `herdr --default-config` のスナップショット（CI 用） |
 
 ## キーバインド
@@ -445,9 +472,6 @@ macOS をソース配布にする方針と噛み合わず、配布経路ごと�
   追加する UI はまだない。
   なお herdr は同じエージェントを表に応じて別綴りで呼ぶ
   （rows_by_agent は `opencode` / `copilot`、sound は `open_code` / `github_copilot`）
-- `ui.tab_bar_right` は生 TOML 入力のまま。形は判明している
-  （`type` は `zoom` `hostname` `datetime` `text` `command`、`text` は `text` フィールド、
-  `command` は `command` `interval_seconds` `timeout_seconds`）
 - `experimental.cjk_ime_agents` は生 TOML 入力。herdr 側に検証がなく任意の文字列が通る
 - Linux / Windows は実機で一度も動かしていない。ウィンドウ描画、キー録音
   （winit がどの物理キーを報告するか、日本語配列の記号キー）、バイナリ探索のフォールバック、

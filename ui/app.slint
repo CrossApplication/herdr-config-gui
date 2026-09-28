@@ -1,5 +1,5 @@
-// Slint rendering of the current UI, for comparison with the Tauri build.
-// The palette is the shipping app's CSS custom properties, verbatim.
+// The whole UI. `build.rs` compiles this to Rust; `src/main.rs` fills the
+// models and answers the callbacks.
 
 import { Button, LineEdit, CheckBox, ComboBox, ScrollView, AboutSlint } from "std-widgets.slint";
 
@@ -61,6 +61,23 @@ export struct ProblemRow {
     entries: [ProblemEntry],
 }
 
+// One `ui.tab_bar_right` entry. The fields of all five types are carried
+// together so switching the type does not discard what was typed; only the
+// ones the chosen type accepts are written. See src/tabbar.rs.
+export struct TabBarEntry {
+    // `zoom` | `hostname` | `datetime` | `text` | `command`
+    ty: string,
+    format: string,
+    text: string,
+    command: string,
+    // Empty means the field is absent, which herdr treats differently from 0.
+    interval: string,
+    timeout: string,
+    preview: string,
+    // What herdr would hide the entry for, or empty.
+    problem: string,
+}
+
 export struct ItemRow {
     path: string,
     key: string,
@@ -76,6 +93,8 @@ export struct ItemRow {
     has-swatch: bool,
     // Only populated when kind == "rows".
     rows: [RowEntry],
+    // Only populated when kind == "tabbar".
+    tabbar: [TabBarEntry],
     is-binding: bool,
     /// The key on its own, or the dotted path while filtering.
     label: string,
@@ -353,6 +372,183 @@ component RowsEditor inherits VerticalLayout {
         label: "＋ 行を追加";
         tone: Palette.accent;
         clicked => { root.act("add-row", 0, 0, 0); }
+    }
+}
+
+// A labelled field, the shape every tab bar entry field takes.
+component FieldLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <string> placeholder;
+    in property <length> field-width: 240px;
+    callback edited(string);
+
+    spacing: 8px;
+    alignment: start;
+
+    Text {
+        text: root.label;
+        color: Palette.dim;
+        font-family: "Menlo";
+        font-size: 11px;
+        vertical-alignment: center;
+        width: 124px;
+    }
+
+    LineEdit {
+        text: root.value;
+        placeholder-text: root.placeholder;
+        width: root.field-width;
+        height: 26px;
+        edited(v) => { root.edited(v); }
+    }
+}
+
+// `ui.tab_bar_right`: an ordered list of status entries, each of one of five
+// types. Unlike the sidebar rows there is no nesting, so a card per entry with
+// the fields of its type is the whole editor.
+component TabBarEditor inherits VerticalLayout {
+    in property <[TabBarEntry]> entries;
+    // action ("add" | "del" | "move"), index, delta
+    callback act(string, int, int);
+    // index, field name, value
+    callback set-field(int, string, string);
+
+    spacing: 8px;
+
+    for e[ei] in entries: Rectangle {
+        background: #1e1e2e80;
+        border-color: Palette.line;
+        border-width: 1px;
+        border-radius: 8px;
+        height: card.preferred-height;
+
+        card := VerticalLayout {
+            spacing: 0px;
+
+            Rectangle {
+                height: 34px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 10px;
+                    Text {
+                        text: (ei + 1) + " 番目";
+                        color: Palette.accent;
+                        font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: e.preview;
+                        color: Palette.dim;
+                        font-family: "Menlo";
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    TinyButton {
+                        label: "↑";
+                        clicked => { root.act("move", ei, -1); }
+                    }
+                    TinyButton {
+                        label: "↓";
+                        clicked => { root.act("move", ei, 1); }
+                    }
+                    TinyButton {
+                        label: "×";
+                        tone: Palette.red;
+                        clicked => { root.act("del", ei, 0); }
+                    }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Palette.line; }
+            }
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: "type";
+                        color: Palette.dim;
+                        font-family: "Menlo";
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        width: 124px;
+                    }
+                    ComboBox {
+                        model: ["zoom", "hostname", "datetime", "text", "command"];
+                        current-value: e.ty;
+                        width: 160px;
+                        height: 26px;
+                        selected(v) => { root.set-field(ei, "type", v); }
+                    }
+                }
+
+                if e.ty == "datetime": FieldLine {
+                    label: "format";
+                    value: e.format;
+                    placeholder: "空欄なら herdr の既定";
+                    edited(v) => { root.set-field(ei, "format", v); }
+                }
+
+                if e.ty == "text": FieldLine {
+                    label: "text";
+                    value: e.text;
+                    edited(v) => { root.set-field(ei, "text", v); }
+                }
+
+                if e.ty == "command": FieldLine {
+                    label: "command";
+                    value: e.command;
+                    field-width: 320px;
+                    edited(v) => { root.set-field(ei, "command", v); }
+                }
+
+                if e.ty == "command": FieldLine {
+                    label: "interval_seconds";
+                    value: e.interval;
+                    placeholder: "1 以上";
+                    field-width: 90px;
+                    edited(v) => { root.set-field(ei, "interval", v); }
+                }
+
+                if e.ty == "command": FieldLine {
+                    label: "timeout_seconds";
+                    value: e.timeout;
+                    placeholder: "1 以上";
+                    field-width: 90px;
+                    edited(v) => { root.set-field(ei, "timeout", v); }
+                }
+
+                // herdr keeps the rest of the config and drops just this
+                // entry, which otherwise looks like a setting that did nothing.
+                if e.problem != "": HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Chip {
+                        label: "非表示";
+                        tone: Palette.warn;
+                    }
+                    Text {
+                        text: e.problem;
+                        color: Palette.warn;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+
+    GhostButton {
+        label: "＋ 項目を追加";
+        tone: Palette.accent;
+        clicked => { root.act("add", 0, 0); }
     }
 }
 
@@ -1132,6 +1328,8 @@ component SettingRow inherits Rectangle {
     callback rows-set-token(string, int, int, string);
     callback rows-set-flag(string, int, int, string, bool);
     callback rows-open-fg(string, int, int);
+    callback tabbar-act(string, string, int, int);
+    callback tabbar-set(string, int, string, string);
     callback record(string);
     callback revert-one(string);
     callback disable-one(string);
@@ -1201,6 +1399,14 @@ component SettingRow inherits Rectangle {
                 selected(v) => { root.edited(item.path, v == "true" || v == "false" ? v : ""); }
             }
 
+            if item.kind == "tabbar": Text {
+                text: item.tabbar.length + " 項目";
+                color: Palette.set;
+                font-size: 11px;
+                vertical-alignment: center;
+                width: 240px;
+            }
+
             if item.kind == "rows": Text {
                 text: item.rows.length + " 行";
                 color: Palette.set;
@@ -1218,7 +1424,8 @@ component SettingRow inherits Rectangle {
                 selected(v) => { root.edited(item.path, v); }
             }
 
-            if !item.enum-strict && item.kind != "bool" && item.kind != "rows": LineEdit {
+            if !item.enum-strict && item.kind != "bool" && item.kind != "rows"
+                && item.kind != "tabbar": LineEdit {
                 text: item.value;
                 placeholder-text: item.default-text == "" ? "(未設定)" : item.default-text;
                 min-width: 160px;
@@ -1284,6 +1491,12 @@ component SettingRow inherits Rectangle {
             font-size: 12px;
             wrap: word-wrap;
             width: parent.width;
+        }
+
+        if item.kind == "tabbar": TabBarEditor {
+            entries: item.tabbar;
+            act(a, i, d) => { root.tabbar-act(item.path, a, i, d); }
+            set-field(i, f, v) => { root.tabbar-set(item.path, i, f, v); }
         }
 
         if item.kind == "rows": RowsEditor {
@@ -1375,6 +1588,8 @@ export component App inherits Window {
     callback rows-set-token(string, int, int, string);
     callback rows-set-flag(string, int, int, string, bool);
     callback rows-open-fg(string, int, int);
+    callback tabbar-act(string, string, int, int);
+    callback tabbar-set(string, int, string, string);
     callback record(string);
     callback revert-one(string);
     callback disable-one(string);
@@ -1561,6 +1776,8 @@ export component App inherits Window {
                                     rows-set-token(p, r, i, v) => { root.rows-set-token(p, r, i, v); }
                                     rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
                                     rows-open-fg(p, r, i) => { root.rows-open-fg(p, r, i); }
+                                    tabbar-act(p, a, i, d) => { root.tabbar-act(p, a, i, d); }
+                                    tabbar-set(p, i, f, v) => { root.tabbar-set(p, i, f, v); }
                                     record(p) => { root.record(p); }
                                     revert-one(p) => { root.revert-one(p); }
                                     disable-one(p) => { root.disable-one(p); }
@@ -1586,6 +1803,8 @@ export component App inherits Window {
                         rows-set-token(p, r, i, v) => { root.rows-set-token(p, r, i, v); }
                         rows-set-flag(p, r, i, f, on) => { root.rows-set-flag(p, r, i, f, on); }
                         rows-open-fg(p, r, i) => { root.rows-open-fg(p, r, i); }
+                        tabbar-act(p, a, i, d) => { root.tabbar-act(p, a, i, d); }
+                        tabbar-set(p, i, f, v) => { root.tabbar-set(p, i, f, v); }
                         record(p) => { root.record(p); }
                         revert-one(p) => { root.revert-one(p); }
                         disable-one(p) => { root.disable-one(p); }
