@@ -1744,6 +1744,14 @@ fn main() -> Result<(), slint::PlatformError> {
         return Ok(());
     }
 
+    // Opening straight onto one setting, for a screenshot or for checking a
+    // layout on a platform where clicking through the form is not practical.
+    if let Ok(text) = std::env::var("HERDR_GUI_FILTER") {
+        state.borrow_mut().filter = text.clone();
+        app.set_filter(text.into());
+        refresh(&app, &state.borrow());
+    }
+
     if std::env::var_os("HERDR_GUI_TRACE").is_some() {
         // Report what the window actually is, from inside the event loop.
         let weak = app.as_weak();

@@ -1334,7 +1334,7 @@ component SettingRow inherits Rectangle {
     callback revert-one(string);
     callback disable-one(string);
 
-    height: layout.preferred-height + 16px;
+    height: layout.preferred-height;
     background: item.is-dirty ? #89b4fa14 : transparent;
 
     Rectangle {
@@ -1347,8 +1347,14 @@ component SettingRow inherits Rectangle {
 
     layout := VerticalLayout {
         x: 12px;
-        y: 8px;
         width: parent.width - 20px;
+        // The margin belongs to the layout rather than to the row's height, so
+        // there is no slack for the layout to hand to a child that can grow.
+        // With `y: 8px` and `height: preferred + 16px` the layout was 16px
+        // taller than it asked for, and an editor ending in a button absorbed
+        // enough of that to put the button on the separator below.
+        padding-top: 8px;
+        padding-bottom: 8px;
         spacing: 5px;
 
         HorizontalLayout {
