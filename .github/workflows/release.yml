@@ -1,0 +1,119 @@
+name: Release
+
+# A tag builds the installers, records where each one came from, and
+# attaches them to a draft release for a person to publish. Running it by
+# hand does everything except the release, so the bundles and their
+# attestations can be checked without cutting a version.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # macOS is deliberately absent: an unnotarised .app would teach people
+    # to switch Gatekeeper off. See .claude/skills/release-signing.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            formats: deb appimage
+          - os: windows-latest
+            formats: msi
+    permissions:
+      contents: read
+      id-token: write      # the Sigstore certificate behind the attestation
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse a tag that disagrees with Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag is $GITHUB_REF_NAME but Cargo.toml says $version"
+            exit 1
+          fi
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev \
+            libfontconfig-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libgl1-mesa-dev \
+            build-essential
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --version 0.12.0 --locked
+
+      - name: Bundle
+        run: |
+          for format in ${{ matrix.formats }}; do
+            cargo bundle --release --format "$format"
+          done
+
+      - name: Collect the installers
+        run: |
+          mkdir -p dist
+          find target/release/bundle -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' \) \
+            -exec cp {} dist/ \;
+          ls -l dist
+          test -n "$(ls dist)"
+
+      # Signs a statement that these exact bytes came from this commit and
+      # this workflow. Anyone can check it with `gh attestation verify`.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      # A draft, so nothing is public until someone has looked at it.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --draft
