@@ -24,12 +24,13 @@ jobs:
         include:
           - os: ubuntu-latest
             formats: deb appimage
-          # cargo-bundle's msi writer uses the file name as an MSI identifier,
-          # and identifiers cannot hold the hyphen in herdr-config-gui.exe. The
-          # binary needs no DLLs beside the system's, so a single portable exe
-          # is a complete distribution.
+          # No cargo-bundle on Windows. Its msi writer uses the file name as an
+          # MSI identifier, which cannot hold the hyphen in herdr-config-gui.exe,
+          # and its exe bundler refuses a binary with no resource section. The
+          # binary needs no DLLs beside the system's, so the exe cargo builds is
+          # a complete distribution on its own.
           - os: windows-latest
-            formats: exe
+            formats: ""
     permissions:
       contents: read
       id-token: write      # the Sigstore certificate behind the attestation
@@ -66,13 +67,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-bundle
+        if: matrix.formats != ''
         run: cargo install cargo-bundle --version 0.12.0 --locked
 
       - name: Bundle
+        if: matrix.formats != ''
         run: |
           for format in ${{ matrix.formats }}; do
             cargo bundle --release --format "$format"
           done
+
+      - name: Build
+        if: matrix.formats == ''
+        run: cargo build --release
 
       - name: Collect the installers
         run: |
@@ -80,11 +87,11 @@ jobs:
           find target/release/bundle -type f \
             \( -name '*.deb' -o -name '*.AppImage' \) \
             -exec cp {} dist/ \;
-          # The exe bundle keeps the bare binary name; give it the version and
-          # architecture the Linux packages already carry.
-          if [ -f target/release/bundle/exe/herdr-config-gui.exe ]; then
+          # Give the bare exe the version and architecture the Linux packages
+          # already carry in their names.
+          if [ -f target/release/herdr-config-gui.exe ]; then
             version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-            cp target/release/bundle/exe/herdr-config-gui.exe \
+            cp target/release/herdr-config-gui.exe \
               "dist/herdr-config-gui_${version}_x86_64.exe"
           fi
           ls -l dist
