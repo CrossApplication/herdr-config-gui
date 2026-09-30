@@ -17,8 +17,6 @@ icon = [
     "icons/128x128.png",
     "icons/128x128@2x.png",
     "icons/icon.icns",
-    # The .msi bundler takes only an .ico and leaves the icon blank otherwise.
-    "icons/icon.ico",
 ]
 short_description = "A form for herdr's config.toml"
 

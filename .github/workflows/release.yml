@@ -24,8 +24,12 @@ jobs:
         include:
           - os: ubuntu-latest
             formats: deb appimage
+          # cargo-bundle's msi writer uses the file name as an MSI identifier,
+          # and identifiers cannot hold the hyphen in herdr-config-gui.exe. The
+          # binary needs no DLLs beside the system's, so a single portable exe
+          # is a complete distribution.
           - os: windows-latest
-            formats: msi
+            formats: exe
     permissions:
       contents: read
       id-token: write      # the Sigstore certificate behind the attestation
@@ -74,8 +78,15 @@ jobs:
         run: |
           mkdir -p dist
           find target/release/bundle -type f \
-            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' \) \
+            \( -name '*.deb' -o -name '*.AppImage' \) \
             -exec cp {} dist/ \;
+          # The exe bundle keeps the bare binary name; give it the version and
+          # architecture the Linux packages already carry.
+          if [ -f target/release/bundle/exe/herdr-config-gui.exe ]; then
+            version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+            cp target/release/bundle/exe/herdr-config-gui.exe \
+              "dist/herdr-config-gui_${version}_x86_64.exe"
+          fi
           ls -l dist
           test -n "$(ls dist)"
 
