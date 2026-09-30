@@ -130,8 +130,9 @@ macOS なら `target/release/bundle/` の下に `osx/herdr Config.app` と
 `dmg/herdr Config.dmg` が出ます。`.app` は `/Applications` にコピーするだけです。
 手元でビルドしたものに quarantine 属性は付かないので、Gatekeeper の警告も出ません。
 
-`deb` `rpm` `appimage` `msi` も作れることになっていますが、こちらで通したのは macOS の
-2 形式だけです。
+Linux なら `cargo bundle --release --format deb`（または `appimage`）で `.deb` / `.AppImage` が
+作れます。Windows は cargo-bundle では作れないので、`cargo build --release` の exe をそのまま
+使ってください。
 
 ## 使い方
 
@@ -184,7 +185,9 @@ HERDR_CONFIG_PATH=/path/to/config.toml herdr-config-gui
 Linux と Windows を実機で動かしていないのが一番大きいところです。ウィンドウの描画、キー録音、
 herdr バイナリの探索、バンドル生成、どれも試せていません。
 
-リリースワークフローも用意していないので、タグを打っても Releases にファイルは付きません。
+まだリリースは出していません。出すときは Linux の `.deb` / `.AppImage` と Windows の `.exe` を
+Releases に置き、GitHub の Artifact Attestations でどのコミットから作られたかを確かめられるように
+します。macOS は引き続きソースからのビルドのみです。
 
 設定のうち次のものは、まだ生の TOML 入力のままです。
 

@@ -9,17 +9,25 @@ AGENTS.md から移した、リリース作業のときだけ必要な記述。
 
 ## 配布方針
 
-**現時点では何も配布していない。** リリースワークフローが未整備で、Releases にファイルは付かない。
-以下は整備するときの方針である。費用のかかる署名手段は使わない前提で、OS ごとに扱いを変える。
+**まだリリースは出していない。** `.github/workflows/release.yml` がタグを受けて Linux の `.deb` /
+`.AppImage` と Windows の `.exe` を作り、出所を証明して下書きのリリースに付ける。公開は人が行う。
+手動で実行すると下書きを作らずに成果物と証明だけ作るので、タグを打つ前に確かめられる。
+タグと `Cargo.toml` のバージョンが食い違うと止まる。
 
-バンドル生成に外部ツールが要るかは形式による。cargo-bundle 0.12.0 のソースを読んだ結果は次のとおり。
+費用のかかる署名手段は使わない前提で、OS ごとに扱いを変える。
 
-| 形式 | 外部依存 |
-| --- | --- |
-| `deb` `rpm` `appimage` `msi` `exe` | なし（純 Rust） |
-| `dmg` | `hdiutil`（macOS 標準） |
-| `osx` | `install_name_tool`（Xcode CLT） |
-| `wxsmsi` | `dotnet` + WiX ← 使わない。`msi` で足りる |
+cargo-bundle 0.12.0 の形式ごとの外部依存と、このリポジトリで実際に試した結果は次のとおり。
+
+| 形式 | 外部依存 | 結果 |
+| --- | --- | --- |
+| `deb` `appimage` | なし（純 Rust） | CI の ubuntu で通る |
+| `osx` / `dmg` | `install_name_tool` / `hdiutil` | 手元の macOS で通る（配布はしない） |
+| `msi` | なし | **使えない。** ファイル名を MSI の識別子に使うが、識別子は `-` を含められず、`herdr-config-gui.exe` で止まる |
+| `exe` | なし | **使えない。** 既存の PE リソースを列挙してからアイコンを足す作りで、リソースを持たないこのバイナリでは `ERROR_RESOURCE_DATA_NOT_FOUND` で止まる |
+| `rpm` / `wxsmsi` | なし / `dotnet` + WiX | 試していない |
+
+そのため Windows だけは cargo-bundle を使わず、`cargo build --release` の exe をそのまま配る。
+システム標準以外の DLL を必要としないので、それ 1 つで配布物として完結する。
 
 ### macOS でバイナリを配らない理由
 
@@ -106,27 +114,24 @@ permissions:
   contents: read
   attestations: write
 steps:
-  - uses: actions/attest-build-provenance@v3
+  - uses: actions/attest-build-provenance@v4
     with:
-      subject-path: target/release/bundle/**/*
+      subject-path: dist/*
 ```
 
 利用者側の検証はこうなる。
 
 ```sh
-gh attestation verify "herdr Config.dmg" --repo CrossApplication/herdr-config-gui
+gh attestation verify herdr-config-gui_0.1.0_amd64.deb --repo CrossApplication/herdr-config-gui
 ```
 
 Apple の公証が「Apple が把握している開発者が作り、マルウェアスキャンを通った」ことを示すのに対し、
 attestation は「公開されたソースのこのコミットから、公開された CI で作られた」ことを示す。
 OSS の文脈では後者のほうが検証可能性が高い。
 
-リポジトリの公開状態で使われる基盤が変わる。**public は Sigstore の Public Good Instance** を使い、
-証明が公開の透明性ログに載る。**private は GitHub 自身の Sigstore インスタンス**を使い、
-透明性ログには載らず GitHub Actions とだけ連携する。
-
-つまり private でも生成自体はできるが、第三者が検証できるのは public のほうである。
-プランごとの利用可否は GitHub のドキュメントでは確認できなかったので、導入前に確かめること。
+リポジトリは public なので、証明は Sigstore の Public Good Instance で署名され、公開の透明性ログに
+載る。誰でも `gh attestation verify` で確かめられる。手動実行で作った 3 つの成果物はすべて、作った
+コミットとワークフローまで一致して検証が通った。1 バイト足したファイルは検証で拒否される。
 
 ## 依存クレートのライセンス内訳
 

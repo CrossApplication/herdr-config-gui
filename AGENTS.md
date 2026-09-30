@@ -297,8 +297,10 @@ navigate モードのキーは `prefix+` / `esc` / `enter` / `tab` / 左右矢�
 
 ## 配布方針
 
-現時点では何も配布していない。方針は「macOS はビルド済みを配らない、Windows は SignPath Foundation で
-署名、Linux はそのまま、成果物は Artifact Attestations で出所を検証可能にする」。
+まだリリースは出していない。`.github/workflows/release.yml` がタグを受けて Linux の `.deb` / `.AppImage`
+と Windows の `.exe` を作り、出所を証明して下書きのリリースに付ける。方針は「macOS はビルド済みを
+配らない、Windows は SignPath Foundation で署名、Linux はそのまま、成果物は Artifact Attestations で
+出所を検証可能にする」。
 その根拠、cargo-bundle の形式ごとの外部依存、各 OS の署名手順は
 [`.claude/skills/release-signing/SKILL.md`](.claude/skills/release-signing/SKILL.md) にある。
 リリース、バンドル生成、署名に触れるときは先にそちらを読むこと。
@@ -331,7 +333,9 @@ UI の Slint は 3 択ライセンスのうち **Royalty-free 2.0** を選んで
 - Linux / Windows は実機で一度も動かしていない。ウィンドウ描画、キー録音
   （winit がどの物理キーを報告するか、日本語配列の記号キー）、バイナリ探索のフォールバック、
   バンドル生成はいずれも未検証。CI でビルドとテストが通ることまでが現状の確認範囲
-- リリースワークフローが未整備。タグを打っても Releases にビルド済みファイルは付かない
+- まだリリースを出していない。ワークフローは手動実行で、3 つの成果物とその証明まで確認済み
+- Windows の exe はコンソールサブシステムでビルドされる（`windows_subsystem = "windows"` がない）ので、
+  起動するとアプリの横にコンソールウィンドウが開く。アイコンも既定のまま。どちらもリリース前に直す
 - 署名は一切していない。macOS の `.app` はリンカによる ad-hoc 署名のみで、
   `spctl` は通らない（ローカルビルドは quarantine が付かないため動作する）
 - `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
