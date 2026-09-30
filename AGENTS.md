@@ -335,5 +335,5 @@ UI の Slint は 3 択ライセンスのうち **Royalty-free 2.0** を選んで
 - 署名は一切していない。macOS の `.app` はリンカによる ad-hoc 署名のみで、
   `spctl` は通らない（ローカルビルドは quarantine が付かないため動作する）
 - `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
-- 共有モジュールに残る `#[derive(Serialize)]` は Tauri の JSON IPC 用だったもので、
-  Slint 版では使っていない。外部に出す形式を持たないので消してよい
+- `src/` の `#[derive(Serialize)]` と `#[derive(Deserialize)]` はどこからも使われていない
+  （旧 Tauri 版が JSON でやり取りしていた名残）。外部に出す形式はないので、`serde` 依存ごと外してよい
