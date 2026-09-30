@@ -127,8 +127,9 @@ enum のメンバーまで報告する。`HERDR_CONFIG_PATH` を一時ファイ�
 
 - `[theme.custom]` と light/dark が受け付けるカラートークン **19 個**
   （`--default-config` の記載は 7 個と 2 個ずつ）
-- herdr が受理するのに文書化されていない設定 **6 個**
-  （`keys.swap_pane_*`、`keys.copy_mode`、`ui.agent_panel_scope`）
+- herdr が受理するのに文書化されていない設定 **7 個**
+  （`keys.swap_pane_*`、`keys.copy_mode`、`ui.agent_panel_scope`、
+  `[[keys.command]]` の `description`）
 
 このファイルのテストは全ての名前を実際の herdr に問い合わせ、でっち上げの名前が
 拒否されることも確認する。enum のメンバーは herdr が報告した値と一致するか比較する。
