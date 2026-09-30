@@ -84,9 +84,12 @@ jobs:
       - name: Collect the installers
         run: |
           mkdir -p dist
-          find target/release/bundle -type f \
-            \( -name '*.deb' -o -name '*.AppImage' \) \
-            -exec cp {} dist/ \;
+          # Only the platforms that ran cargo-bundle have this directory.
+          if [ -d target/release/bundle ]; then
+            find target/release/bundle -type f \
+              \( -name '*.deb' -o -name '*.AppImage' \) \
+              -exec cp {} dist/ \;
+          fi
           # Give the bare exe the version and architecture the Linux packages
           # already carry in their names.
           if [ -f target/release/herdr-config-gui.exe ]; then
