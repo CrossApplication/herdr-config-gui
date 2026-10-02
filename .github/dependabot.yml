@@ -1,0 +1,28 @@
+# Version updates. Alerts and security updates are switched on in the
+# repository settings and do not depend on this file.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # A fresh release waits a week before it is proposed, so a broken or
+    # compromised version has time to be noticed and yanked first.
+    cooldown:
+      default-days: 7
+    groups:
+      # Compatible under SemVer, so they arrive together in one PR a week.
+      # A major bump still gets a PR of its own.
+      cargo-minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
