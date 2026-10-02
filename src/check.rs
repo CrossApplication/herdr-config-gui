@@ -10,13 +10,11 @@
 //! makes herdr discard the whole config, so saving one would silently revert
 //! every setting the user has.
 
-use serde::Serialize;
 use std::path::PathBuf;
 
 use crate::herdr;
 
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Severity {
     /// herdr falls back to defaults for the entire file.
     Error,
@@ -24,8 +22,7 @@ pub enum Severity {
     Warning,
 }
 
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
     UnknownSection,
     UnknownKey,
@@ -37,7 +34,7 @@ pub enum Kind {
     Other,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub kind: Kind,
@@ -52,7 +49,7 @@ pub struct Diagnostic {
     pub allowed: Vec<String>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CheckReport {
     /// herdr reported no issues at all.
     pub ok: bool,

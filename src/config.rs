@@ -10,7 +10,6 @@
 //! a setting returned to "inherit" is removed from the file rather than
 //! written out as its default value.
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
@@ -102,21 +101,24 @@ pub fn config_path() -> Option<PathBuf> {
     herdr::resolved_config_path().or_else(|| resolve_config_path(&PathEnv::from_process()))
 }
 
-#[derive(Serialize)]
+// The fields marked dead_code were read only by the old Tauri UI, through JSON.
+// Nothing reads them now; deleting them means editing the parser and its tests.
 pub struct ConfigState {
     pub path: String,
     pub exists: bool,
+    #[allow(dead_code)]
     pub raw: String,
     /// Dotted paths of every leaf value present in the file.
+    #[allow(dead_code)]
     pub set_paths: Vec<String>,
     /// path -> value, as verbatim TOML source text.
     pub values: std::collections::BTreeMap<String, String>,
+    #[allow(dead_code)]
     pub parse_error: Option<String>,
 }
 
 /// What an edit does.
-#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Op {
     /// Write `value`, or remove the key when it is `None`.
     #[default]
@@ -129,11 +131,10 @@ pub enum Op {
 /// "\"ctrl+a\"", "[\"a\", \"b\"]"); `None` means "remove, inherit the default".
 ///
 /// Paths may index an array of tables: `keys.command[0].key`.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Edit {
     pub path: String,
     pub value: Option<String>,
-    #[serde(default)]
     pub op: Op,
 }
 
@@ -168,7 +169,7 @@ pub fn parse_path(path: &str) -> Result<Vec<Seg>, String> {
     Ok(out)
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Change {
     pub path: String,
     pub from: Option<String>,
@@ -177,8 +178,10 @@ pub struct Change {
     pub action: &'static str,
 }
 
-#[derive(Serialize)]
+// The fields marked dead_code were read only by the old Tauri UI, through JSON.
+// Nothing reads them now; deleting them means editing the parser and its tests.
 pub struct SaveResult {
+    #[allow(dead_code)]
     pub path: String,
     /// False when the pre-flight check refused the content.
     pub written: bool,

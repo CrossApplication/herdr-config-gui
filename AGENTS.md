@@ -339,5 +339,5 @@ UI の Slint は 3 択ライセンスのうち **Royalty-free 2.0** を選んで
 - 署名は一切していない。macOS の `.app` はリンカによる ad-hoc 署名のみで、
   `spctl` は通らない（ローカルビルドは quarantine が付かないため動作する）
 - `config.toml.bak-<epoch>` を毎回作るが世代管理はしていない
-- `src/` の `#[derive(Serialize)]` と `#[derive(Deserialize)]` はどこからも使われていない
-  （旧 Tauri 版が JSON でやり取りしていた名残）。外部に出す形式はないので、`serde` 依存ごと外してよい
+- `config.rs` と `schema.rs` のフィールド 15 個に `#[allow(dead_code)]` が付いている。旧 Tauri 版の
+  UI が JSON 経由で読んでいただけで、今はどこからも読まれない。消すにはパーサとテストの修正が要る

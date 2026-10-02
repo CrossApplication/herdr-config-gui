@@ -4,7 +4,6 @@
 //! PATH, so `Command::new("herdr")` alone is not enough. We probe the install
 //! locations herdr documents for each platform.
 
-use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -150,7 +149,7 @@ pub fn default_config() -> Result<String, String> {
     run(&["--default-config"])
 }
 
-#[derive(Serialize, Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq)]
 pub struct ResolvedPaths {
     pub config: Option<String>,
     pub log: Option<String>,

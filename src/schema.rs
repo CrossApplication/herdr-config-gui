@@ -7,16 +7,19 @@
 //! must be tracked too, or their keys get attributed to the wrong table.
 
 use regex::Regex;
-use serde::Serialize;
 use toml_edit::Value;
 
 use crate::overlay;
 
-#[derive(Serialize, Clone)]
+// The fields marked dead_code were read only by the old Tauri UI, through JSON.
+// Nothing reads them now; deleting them means editing the parser and its tests.
+#[derive(Clone)]
 pub struct Item {
+    #[allow(dead_code)]
     pub line: usize,
     /// Dotted path used as the identity of a setting, e.g. `ui.toast.delivery`.
     pub path: String,
+    #[allow(dead_code)]
     pub section: String,
     pub key: String,
     /// `bool` | `integer` | `float` | `string` | `array` | `table` | `datetime`
@@ -30,11 +33,13 @@ pub struct Item {
     /// Quoted literals harvested from the doc block; likely enum members.
     pub enum_candidates: Vec<String>,
     /// True when the default is `""` and the docs call it optional/unset.
+    #[allow(dead_code)]
     pub optional: bool,
     /// True when the default is NOT empty but the docs say an empty string
     /// turns the feature off. Such a setting needs a way to write `""`
     /// explicitly, which "clear the field to inherit the default" cannot do.
     pub empty_disables: bool,
+    #[allow(dead_code)]
     pub is_key_binding: bool,
     /// Which set of syntax rules applies to this binding, if it is one.
     /// `prefix` the prefix chord itself, `action` a normal prefix-mode or
@@ -63,13 +68,18 @@ pub struct Item {
     pub from_overlay: bool,
 }
 
-#[derive(Serialize, Clone)]
+// The fields marked dead_code were read only by the old Tauri UI, through JSON.
+// Nothing reads them now; deleting them means editing the parser and its tests.
+#[derive(Clone)]
 pub struct Section {
     pub name: String,
+    #[allow(dead_code)]
     pub line: usize,
     /// The header itself was commented out in the default config.
+    #[allow(dead_code)]
     pub commented: bool,
     pub array_of_tables: bool,
+    #[allow(dead_code)]
     pub doc: Vec<String>,
     pub items: Vec<Item>,
     /// Prose lines shaped like `key = value` but not valid TOML. These are
@@ -78,17 +88,24 @@ pub struct Section {
     pub hints: Vec<Hint>,
 }
 
-#[derive(Serialize, Clone)]
+// The fields marked dead_code were read only by the old Tauri UI, through JSON.
+// Nothing reads them now; deleting them means editing the parser and its tests.
+#[derive(Clone)]
 pub struct Hint {
+    #[allow(dead_code)]
     pub line: usize,
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub description: String,
 }
 
-#[derive(Serialize)]
+// The fields marked dead_code were read only by the old Tauri UI, through JSON.
+// Nothing reads them now; deleting them means editing the parser and its tests.
 pub struct Schema {
     pub sections: Vec<Section>,
     pub item_count: usize,
+    #[allow(dead_code)]
     pub hint_count: usize,
 }
 

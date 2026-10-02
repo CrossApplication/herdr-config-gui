@@ -23,11 +23,29 @@ short_description = "A form for herdr's config.toml"
 [dependencies]
 # Slint under the royalty-free licence; the About dialog carries the
 # attribution that licence asks for.
-# `unstable-winit-030` exposes the raw winit events, which carry the physical
-# key and the unswapped modifiers Slint itself discards. Key recording needs
-# both: see src/physical.rs.
-slint = { version = "1.18", features = ["unstable-winit-030"] }
-serde = { version = "1", features = ["derive"] }
+#
+# The default feature set is off so that only what the app uses is built.
+# Of the defaults, `system-tray` is gone (no tray icon here; on Linux it
+# pulled in a D-Bus tray client) and `compat-1-2` gives way to the
+# `compat-1-18` Slint requires.
+#   std, compat-1-18     required by Slint itself
+#   backend-winit        the windowing backend
+#   renderer-femtovg     OpenGL rendering
+#   renderer-software    the fallback where OpenGL will not start (VMs, RDP,
+#                        missing drivers); without it the window never opens
+#   accessibility        screen readers
+#   unstable-winit-030   the raw winit events, which carry the physical key
+#                        and the unswapped modifiers Slint discards; key
+#                        recording needs both: see src/physical.rs
+slint = { version = "1.18", default-features = false, features = [
+    "std",
+    "compat-1-18",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+    "unstable-winit-030",
+] }
 toml_edit = "0.22"
 regex = "1"
 
