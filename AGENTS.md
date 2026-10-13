@@ -41,6 +41,23 @@ GitHub Actions が ubuntu / macOS / windows の 3 OS で `fmt` / `clippy` / `tes
 herdr --default-config > fixtures/default-config.toml
 ```
 
+### 固定しているもの
+
+CI とリリースのビルドが、外部の都合で変わらないように固定している。
+
+| 対象 | 固定のしかた | 更新 |
+| --- | --- | --- |
+| Rust ツールチェーン | `rust-toolchain.toml`（1.99.0） | 手で上げる |
+| クレート | `Cargo.lock`。CI とリリースは `--locked` で、lock とずれたら失敗する | Dependabot（週 1） |
+| GitHub Actions | コミット SHA。コメントに版を残す | Dependabot（週 1） |
+| ランナー | `ubuntu-24.04` / `macos-26` / `windows-2025` | 手で上げる |
+
+- `rust-toolchain.toml` を読むのは rustup だけで、Homebrew やディストリの cargo は無視する。
+  手元のビルドが CI と同じ版になるとは限らない
+- Dependabot にも Rust ツールチェーンの更新機能はあるらしいが、`package-ecosystem` に書く値を
+  公式ドキュメントで確認できなかった。値を誤ると `dependabot.yml` 全体が無効になりうるので入れていない
+- ランナーの版は Dependabot が上げない。GitHub がその版の廃止を告知したら上げる
+
 ## 設計方針
 
 ### 設定項目表を内蔵しない

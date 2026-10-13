@@ -22,14 +22,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             formats: deb appimage
           # No cargo-bundle on Windows. Its msi writer uses the file name as an
           # MSI identifier, which cannot hold the hyphen in herdr-config-gui.exe,
           # and its exe bundler refuses a binary with no resource section. The
           # binary needs no DLLs beside the system's, so the exe cargo builds is
           # a complete distribution on its own.
-          - os: windows-latest
+          - os: windows-2025
             formats: ""
     permissions:
       contents: read
@@ -39,7 +39,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Refuse a tag that disagrees with Cargo.toml
         if: startsWith(github.ref, 'refs/tags/')
@@ -62,13 +62,26 @@ jobs:
             libgl1-mesa-dev \
             build-essential
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The version comes from rust-toolchain.toml, so CI, the release build
+      # and anyone building with rustup use the same compiler.
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup --version
+          rustc --version
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-bundle
         if: matrix.formats != ''
         run: cargo install cargo-bundle --version 0.12.0 --locked
+
+      # Every platform builds here with --locked, so a Cargo.lock that has
+      # drifted from Cargo.toml fails the release instead of being rewritten.
+      # cargo-bundle has no --locked of its own; its build reuses this output.
+      - name: Build
+        run: cargo build --release --locked
 
       - name: Bundle
         if: matrix.formats != ''
@@ -76,10 +89,6 @@ jobs:
           for format in ${{ matrix.formats }}; do
             cargo bundle --release --format "$format"
           done
-
-      - name: Build
-        if: matrix.formats == ''
-        run: cargo build --release
 
       - name: Collect the installers
         run: |
@@ -102,11 +111,11 @@ jobs:
 
       # Signs a statement that these exact bytes came from this commit and
       # this workflow. Anyone can check it with `gh attestation verify`.
-      - uses: actions/attest-build-provenance@v4
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bundle-${{ runner.os }}
           path: dist/*
@@ -115,11 +124,11 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true

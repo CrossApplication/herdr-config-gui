@@ -1,0 +1,7 @@
+# The compiler CI and the release build use, so a new stable release cannot
+# change what they build or which lints fail them. Only rustup reads this
+# file; a Homebrew or distro cargo ignores it and uses whatever it is.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
