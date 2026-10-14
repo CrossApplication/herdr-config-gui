@@ -46,7 +46,7 @@ slint = { version = "1.18", default-features = false, features = [
     "accessibility",
     "unstable-winit-030",
 ] }
-toml_edit = "0.22"
+toml_edit = "0.25"
 regex = "1"
 
 [build-dependencies]
