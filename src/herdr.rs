@@ -88,9 +88,27 @@ fn windows_release_dirs(env: &BinEnv) -> Vec<PathBuf> {
     dirs.into_iter().map(|d| d.join("herdr.exe")).collect()
 }
 
+/// A `Command` for herdr that does not flash a console window on Windows.
+///
+/// The app is a GUI-subsystem program there, so it has no console of its own
+/// to share. Windows opens a fresh console for every console program such a
+/// process starts unless told not to, and herdr is one. Output is captured
+/// through pipes either way.
+fn command(exe: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(exe);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Resolve the herdr executable: PATH first, then documented install locations.
 pub fn resolve() -> Option<PathBuf> {
-    if Command::new("herdr").arg("--version").output().is_ok() {
+    if command("herdr").arg("--version").output().is_ok() {
         return Some(PathBuf::from("herdr"));
     }
     let env = BinEnv::from_process();
@@ -106,7 +124,7 @@ pub fn resolve() -> Option<PathBuf> {
 
 pub fn run(args: &[&str]) -> Result<String, String> {
     let exe = resolve().ok_or_else(|| "herdr executable not found".to_string())?;
-    let out = Command::new(&exe)
+    let out = command(&exe)
         .args(args)
         .output()
         .map_err(|e| format!("failed to run {}: {e}", exe.display()))?;
@@ -127,7 +145,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
 /// and that output is exactly what we want to read.
 pub fn run_against_config(args: &[&str], config: &std::path::Path) -> Result<String, String> {
     let exe = resolve().ok_or_else(|| "herdr executable not found".to_string())?;
-    let out = Command::new(&exe)
+    let out = command(&exe)
         .args(args)
         .env("HERDR_CONFIG_PATH", config)
         .output()
