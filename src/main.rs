@@ -1,6 +1,10 @@
 //! herdr-config-gui: a form for herdr's config.toml, derived at run time from
 //! `herdr --default-config` and written back with a minimal diff.
 
+// A GUI program on Windows, so launching it does not also open a console
+// window. See `attach_parent_console` for how the debug output still shows.
+#![windows_subsystem = "windows"]
+
 /// `herdr config check`, run and its diagnostics parsed.
 mod check;
 
@@ -930,7 +934,31 @@ fn refresh(app: &App, state: &State) {
     refresh_problems(app, state);
 }
 
+/// Borrow the console of whatever started us, if anything did.
+///
+/// A GUI-subsystem program starts without a console, so on its own the
+/// `HERDR_GUI_DUMP` / `HERDR_GUI_TRACE` output and the startup errors would go
+/// nowhere when run from cmd or PowerShell. Attaching to the parent's console
+/// gives them somewhere to land. From Explorer there is no parent console and
+/// the call fails quietly. Output redirected to a file or a pipe already has
+/// its handle and is unaffected either way.
+#[cfg(windows)]
+fn attach_parent_console() {
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(process_id: u32) -> i32;
+    }
+    // SAFETY: AttachConsole takes a plain integer and only reports failure
+    // through its return value, which there is nothing to do about.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
+    #[cfg(windows)]
+    attach_parent_console();
     let default_config = herdr::default_config().unwrap_or_else(|e| {
         eprintln!("herdr --default-config failed: {e}");
         String::new()
