@@ -21,6 +21,8 @@ pub struct BinEnv {
     pub home: Option<PathBuf>,
     /// `%LOCALAPPDATA%`, Windows only.
     pub local_app_data: Option<PathBuf>,
+    /// `PATH`, searched by hand on Windows. See `resolve`.
+    pub path: Option<std::ffi::OsString>,
 }
 
 impl BinEnv {
@@ -29,6 +31,7 @@ impl BinEnv {
             windows: cfg!(windows),
             home: home_dir(),
             local_app_data: std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            path: std::env::var_os("PATH"),
         }
     }
 }
@@ -61,6 +64,30 @@ pub fn candidate_paths(env: &BinEnv) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// `herdr.exe` in each PATH directory, in order. Windows only.
+///
+/// Relative entries such as `.` are skipped: they would resolve against
+/// whatever the current directory happens to be, which is the kind of lookup
+/// `resolve` exists to avoid.
+fn path_candidates(env: &BinEnv) -> Vec<PathBuf> {
+    let Some(path) = &env.path else {
+        return Vec::new();
+    };
+    std::env::split_paths(path)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join("herdr.exe"))
+        .collect()
+}
+
+/// The first herdr that exists on Windows: PATH, then the install locations.
+fn find_on_windows(env: &BinEnv) -> Option<PathBuf> {
+    path_candidates(env)
+        .into_iter()
+        .chain(candidate_paths(env))
+        .chain(windows_release_dirs(env))
+        .find(|p| p.is_file())
 }
 
 /// The Windows installer keeps every version it has downloaded, so the newest
@@ -107,19 +134,21 @@ fn command(exe: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 /// Resolve the herdr executable: PATH first, then documented install locations.
+///
+/// Windows is searched by hand and always yields a full path. Given a bare
+/// name, Rust's standard library looks in the directory holding this app's
+/// own exe before PATH, so a `herdr.exe` sitting next to it -- in Downloads,
+/// say, where the exe is likely to be run from -- would be run in place of
+/// the real one, at startup and on every save.
 pub fn resolve() -> Option<PathBuf> {
+    let env = BinEnv::from_process();
+    if env.windows {
+        return find_on_windows(&env);
+    }
     if command("herdr").arg("--version").output().is_ok() {
         return Some(PathBuf::from("herdr"));
     }
-    let env = BinEnv::from_process();
-    candidate_paths(&env)
-        .into_iter()
-        .chain(if env.windows {
-            windows_release_dirs(&env)
-        } else {
-            Vec::new()
-        })
-        .find(|p| p.is_file())
+    candidate_paths(&env).into_iter().find(|p| p.is_file())
 }
 
 pub fn run(args: &[&str]) -> Result<String, String> {
@@ -216,6 +245,7 @@ mod tests {
             windows: true,
             home: Some(PathBuf::from("C:/Users/me")),
             local_app_data: Some(PathBuf::from("C:/Users/me/AppData/Local")),
+            path: None,
         };
         let paths = candidate_paths(&env);
         assert!(
@@ -238,6 +268,7 @@ mod tests {
             windows: false,
             home: Some(PathBuf::from("/home/me")),
             local_app_data: None,
+            path: None,
         };
         let paths = candidate_paths(&env);
         assert!(paths.iter().all(|p| p.file_name().unwrap() == "herdr"));
@@ -252,17 +283,53 @@ mod tests {
             windows: false,
             home: None,
             local_app_data: None,
+            path: None,
         });
         assert!(!unix.is_empty(), "system paths are still probed");
         let win = candidate_paths(&BinEnv {
             windows: true,
             home: None,
             local_app_data: None,
+            path: None,
         });
         assert!(
             win.is_empty(),
             "nothing is guessable on Windows without a profile"
         );
+    }
+
+    #[test]
+    fn windows_runs_herdr_from_path_not_from_beside_the_app() {
+        let root = std::env::temp_dir().join(format!("herdr-gui-lookup-{}", std::process::id()));
+        let app_dir = root.join("Downloads");
+        let on_path = root.join("bin");
+        let elsewhere = root.join("other");
+        for dir in [&app_dir, &on_path, &elsewhere] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let env = |dirs: &[&PathBuf]| BinEnv {
+            windows: true,
+            home: None,
+            local_app_data: None,
+            path: Some(std::env::join_paths(dirs).unwrap()),
+        };
+
+        // A herdr.exe beside the app, and nowhere else: not found.
+        std::fs::write(app_dir.join("herdr.exe"), "").unwrap();
+        let beside_only = find_on_windows(&env(&[&elsewhere]));
+        // The real one on PATH is preferred to the one beside the app.
+        std::fs::write(on_path.join("herdr.exe"), "").unwrap();
+        let both = find_on_windows(&env(&[&elsewhere, &on_path]));
+        // A relative PATH entry is never searched.
+        let relative = path_candidates(&BinEnv {
+            path: Some(std::env::join_paths([".", "bin"]).unwrap()),
+            ..env(&[])
+        });
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(beside_only, None);
+        assert_eq!(both, Some(on_path.join("herdr.exe")));
+        assert!(relative.is_empty(), "{relative:?}");
     }
 
     #[test]
