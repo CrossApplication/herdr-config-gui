@@ -10,7 +10,8 @@
 //! makes herdr discard the whole config, so saving one would silently revert
 //! every setting the user has.
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use crate::herdr;
 
@@ -251,10 +252,26 @@ fn temp_path() -> PathBuf {
     ))
 }
 
+/// Write the content to be checked where only this user can read it.
+///
+/// On Linux the temporary directory is the shared `/tmp`, and a file created
+/// the ordinary way there is readable by every local user under the usual
+/// umask. The config can hold commands with tokens in them, so the file is
+/// created owner-only. `create_new` refuses a file or symlink already at the
+/// path instead of writing through it. macOS and Windows give each user a
+/// private temporary directory, but the same rules cost nothing there.
+fn write_private(path: &Path, raw: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(raw.as_bytes())
+}
+
 /// Ask herdr to validate content that has not been written anywhere yet.
 pub fn check_toml(raw: &str) -> CheckReport {
     let path = temp_path();
-    if let Err(e) = std::fs::write(&path, raw) {
+    if let Err(e) = write_private(&path, raw) {
         return CheckReport {
             ok: false,
             discards_config: false,
@@ -399,6 +416,28 @@ mod tests {
             })
             .collect();
         assert!(leaked.is_empty(), "temp files left: {leaked:?}");
+    }
+
+    #[test]
+    fn the_checked_content_is_written_privately() {
+        let path = temp_path();
+        write_private(&path, "[theme]\n").unwrap();
+        let written = std::fs::read_to_string(&path);
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777
+        };
+        // Something already at the path is refused, not overwritten.
+        let again = write_private(&path, "[ui]\n");
+        let kept = std::fs::read_to_string(&path);
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(written.unwrap(), "[theme]\n");
+        #[cfg(unix)]
+        assert_eq!(mode, 0o600, "other users must not be able to read it");
+        assert_eq!(again.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(kept.unwrap(), "[theme]\n");
     }
 
     #[test]

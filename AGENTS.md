@@ -103,6 +103,11 @@ herdr のバイナリが唯一のスキーマ源なので、herdr が更新さ�
 | 書き込み | `toml_edit` による最小差分 |
 | 反映 | `herdr server reload-config` |
 
+検証用の一時ファイルは、本人だけが読める権限（Unix では `0600`）で新規作成する。Linux の一時
+ディレクトリは全ユーザー共有の `/tmp` で、普通に作ると他のユーザーが読める。設定にはトークン入りの
+コマンドが書かれうる。既に同名のファイルやシンボリックリンクがあれば、上書きせずに失敗させる。
+置き場所を設定ファイルの隣にしないのは、検証に通らない内容をそこへ書かないという上の保証を守るため。
+
 ## 対応プラットフォーム
 
 herdr の配布に合わせて macOS、Linux、Windows。ただし macOS は Apple Silicon (aarch64) のみを
@@ -238,7 +243,15 @@ unknown field `zzz`, expected one of `command`, `interval_seconds`, `timeout_sec
 GUI は Finder / Explorer から起動するとシェルの PATH を継承しないため、PATH で
 見つからない場合は各 OS のインストール先を探す。この経路は macOS のバンドル済み
 `.app` を PATH なしで起動して検証済み（`~/.local/bin/herdr` を発見する）。
-Windows と Linux では未検証。Windows では `.exe` 付きで
+Windows と Linux では未検証。
+
+**Windows では PATH も自前で探し、herdr を必ずフルパスで起動する。** 名前だけで `Command::new("herdr")`
+とすると、Rust の標準ライブラリは PATH より先にこのアプリの exe があるフォルダを探す。ダウンロード
+フォルダから起動されたとき、そこにある別の `herdr.exe` を起動時と保存のたびに実行してしまう。
+PATH の相対パス（`.` など）も同じ理由で飛ばす。macOS と Linux にはこの探索順の問題がないので、
+名前で起動している。
+
+PATH で見つからなければ、Windows では `.exe` 付きで
 `%LOCALAPPDATA%\Programs\Herdr\bin`、`%USERPROFILE%\.local\bin`、
 それと `%USERPROFILE%\.herdr\packages\standalone\releases` 配下の最新
 バージョンディレクトリを見る。
