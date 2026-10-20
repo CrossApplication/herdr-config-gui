@@ -41,6 +41,19 @@ GitHub Actions が ubuntu / macOS / windows の 3 OS で `fmt` / `clippy` / `tes
 herdr --default-config > fixtures/default-config.toml
 ```
 
+別のワークフロー（`.github/workflows/audit.yml`）が `cargo audit` で `Cargo.lock` を RustSec の
+アドバイザリと照合する。push と PR に加えて**週 1 回**動かす。依存を変えなくても、既に入っている
+クレートに新しいアドバイザリが出るため。
+
+| 種類 | 扱い | 理由 |
+| --- | --- | --- |
+| vulnerability | 失敗 | |
+| unsound | 失敗（`--deny unsound`） | 安全なコードから届くメモリ安全性のバグ。GitHub のアラートは一部を脆弱性として扱う（`glib` の `VariantStrIter` は Dependabot では medium、`cargo audit` の既定では警告だけだった） |
+| unmaintained / yanked | 警告のみ | どれも Slint の依存経由で入っていて、このリポジトリでは直せない。失敗にすると CI が赤いまま止まる |
+
+GitHub は、public リポジトリで 60 日間活動がないと定期実行を止める。止まったら Actions の画面から
+有効に戻す。定期実行が失敗したときの通知は、cron の行を最後に変更した人に届く。
+
 ### 固定しているもの
 
 CI とリリースのビルドが、外部の都合で変わらないように固定している。
@@ -50,6 +63,7 @@ CI とリリースのビルドが、外部の都合で変わらないように�
 | Rust ツールチェーン | `rust-toolchain.toml`（1.99.0） | 手で上げる |
 | クレート | `Cargo.lock`。CI とリリースは `--locked` で、lock とずれたら失敗する | Dependabot（週 1） |
 | GitHub Actions | コミット SHA。コメントに版を残す | Dependabot（週 1） |
+| cargo-audit | `audit.yml` の `CARGO_AUDIT_VERSION`。`--locked` でインストール | 手で上げる |
 | ランナー | `ubuntu-24.04` / `macos-26` / `windows-2025` | 手で上げる |
 
 - `rust-toolchain.toml` を読むのは rustup だけで、Homebrew やディストリの cargo は無視する。

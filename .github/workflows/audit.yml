@@ -1,0 +1,50 @@
+name: Audit
+
+# Checks Cargo.lock against the RustSec advisory database and fails on a
+# known vulnerability. The weekly run is the one that matters most: new
+# advisories are published against crates already in the lock, so a lock
+# nobody has touched can still become vulnerable.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 0 * * 1'   # Mondays 00:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+    env:
+      # Installed from source, so Dependabot does not see it. Bump by hand.
+      CARGO_AUDIT_VERSION: 0.22.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      # Keeps the cargo-audit binary between runs, so it is built once.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+
+      # A vulnerability fails the job. So does an unsound advisory: those
+      # are memory-safety bugs reachable from safe code, and GitHub's own
+      # alerts already rate some of them as vulnerabilities. Unmaintained and
+      # yanked crates only warn; all of them reach this lock through Slint's
+      # dependencies, and failing on them would leave CI red for reasons this
+      # repository cannot fix.
+      - name: Audit Cargo.lock
+        run: cargo audit --deny unsound
