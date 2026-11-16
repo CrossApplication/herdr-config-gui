@@ -994,6 +994,7 @@ fn main() -> Result<(), slint::PlatformError> {
         .map_err(|e| slint::PlatformError::Other(format!("backend selection failed: {e}")))?;
 
     let app = App::new()?;
+    app.set_version(env!("CARGO_PKG_VERSION").into());
     app.set_meta(meta.into());
     app.set_result("".into());
     refresh(&app, &state.borrow());
