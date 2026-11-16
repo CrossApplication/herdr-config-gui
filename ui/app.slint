@@ -740,6 +740,7 @@ component ColorPicker inherits Rectangle {
 // Attribution and licences. The Slint royalty-free licence asks for the
 // `AboutSlint` widget in a screen reachable from the top-level menu.
 component AboutPanel inherits Rectangle {
+    in property <string> version;
     callback close();
 
     background: #11111bb8;
@@ -760,7 +761,7 @@ component AboutPanel inherits Rectangle {
 
             HorizontalLayout {
                 Text {
-                    text: "herdr Config 0.1.0";
+                    text: "herdr Config " + root.version;
                     color: Palette.text;
                     font-size: 14px;
                     font-weight: 700;
@@ -1538,6 +1539,7 @@ export component App inherits Window {
     in property <int> dirty-count: 0;
     in property <string> result;
     in property <bool> about-open: false;
+    in property <string> version;
     in property <[string]> allowed-tokens;
     in property <bool> picker-open: false;
     in property <string> picker-title;
@@ -1889,6 +1891,7 @@ export component App inherits Window {
     }
 
     if about-open: AboutPanel {
+        version: root.version;
         close() => { root.close-about(); }
     }
 

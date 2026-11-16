@@ -1,6 +1,6 @@
 [package]
 name = "herdr-config-gui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.92"  # what slint 1.18 requires
 license = "BSD-3-Clause"
